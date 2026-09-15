@@ -1,0 +1,102 @@
+name: Release
+
+on:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version
+        id: ver
+        run: |
+          if [ ! -f versions.txt ]; then
+            echo "versions.txt not found" >&2
+            exit 1
+          fi
+          v=$(tr -d '[:space:]' < versions.txt)
+          if ! echo "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "versions.txt must contain semver X.Y.Z (got: '$v')" >&2
+            exit 1
+          fi
+          bin="${{ github.event.repository.name }}"
+          origin="${GITHUB_SERVER_URL%/}/${GITHUB_REPOSITORY}"
+          if [ -f upstream.txt ]; then
+            upstream=$(tr -d '[:space:]' < upstream.txt)
+          else
+            upstream="$origin"
+          fi
+          echo "version=$v"          >> "$GITHUB_OUTPUT"
+          echo "tag=v$v"             >> "$GITHUB_OUTPUT"
+          echo "bin=$bin"            >> "$GITHUB_OUTPUT"
+          echo "origin=$origin"      >> "$GITHUB_OUTPUT"
+          echo "upstream=$upstream"  >> "$GITHUB_OUTPUT"
+          echo "commit=$(printf '%s' "$GITHUB_SHA" | cut -c1-7)" >> "$GITHUB_OUTPUT"
+
+      - name: Check tag existence
+        id: tagcheck
+        run: |
+          if git rev-parse "refs/tags/${{ steps.ver.outputs.tag }}" >/dev/null 2>&1; then
+            echo "Tag ${{ steps.ver.outputs.tag }} already exists - skipping the release"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Go
+        if: steps.tagcheck.outputs.exists == 'false'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run tests
+        if: steps.tagcheck.outputs.exists == 'false'
+        run: go test ./...
+
+      - name: Build archives
+        if: steps.tagcheck.outputs.exists == 'false'
+        env:
+          BIN: ${{ steps.ver.outputs.bin }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          ORIGIN: ${{ steps.ver.outputs.origin }}
+          UPSTREAM: ${{ steps.ver.outputs.upstream }}
+          COMMIT: ${{ steps.ver.outputs.commit }}
+          CHANNEL: github-release
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os=${target%/*}
+            arch=${target#*/}
+            name="${BIN}-${os}-${arch}"
+            out="dist/${name}.tar.gz"
+            tmp=$(mktemp -d)
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
+              go build -trimpath \
+                -ldflags="-s -w -X main.version=${VERSION} -X main.origin=${ORIGIN} -X main.upstream=${UPSTREAM} -X main.commit=${COMMIT} -X main.channel=${CHANNEL}" \
+                -o "$tmp/${BIN}" ./...
+            chmod +x "$tmp/${BIN}"
+            tar -C "$tmp" -czf "$out" "${BIN}"
+            rm -rf "$tmp"
+          done
+          (cd dist && sha256sum *.tar.gz > SHA256SUMS)
+          ls -la dist
+
+      - name: Create release
+        if: steps.tagcheck.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.ver.outputs.tag }}" \
+            --title "${{ steps.ver.outputs.tag }}" \
+            --target "${{ github.sha }}" \
+            --notes "Automated release ${{ steps.ver.outputs.tag }} from versions.txt" \
+            dist/*
