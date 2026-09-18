@@ -56,8 +56,19 @@ install: build
     install -m 0755 {{bin}} "$HOME/.local/bin/{{bin}}"
 
 [group('install')]
+[doc('install completions and wire them into ~/.bashrc / ~/.zshrc')]
+completions shell="all": build
+    ./{{bin}} install-completions {{shell}}
+
+[group('install')]
+[doc('remove installed completions and their rc lines')]
+completions-uninstall: build
+    ./{{bin}} uninstall-completions all
+
+[group('install')]
 [doc('remove from ~/.local/bin')]
 uninstall:
+    -"$HOME/.local/bin/{{bin}}" uninstall-completions all
     rm -f "$HOME/.local/bin/{{bin}}"
 
 [group('release')]

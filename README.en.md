@@ -1,6 +1,6 @@
 # git-repos
 
-**English** · [Русский](README.md.ru)
+**English** · [Русский](README.ru.md)
 
 A CLI that compares local git repositories with your provider account (GitHub for now) and
 shows what is out of sync.
@@ -16,6 +16,9 @@ shows what is out of sync.
 | `clean-local` | deletes local repositories that have no remote |
 | `clean-remote` | deletes remote repositories that have no local copy |
 | `do` | runs a command inside every selected repository, one at a time |
+| `completion` | prints the shell completion script for bash or zsh |
+| `install-completions` | installs the completion into bash and zsh |
+| `uninstall-completions` | removes the completion from bash and zsh |
 
 Tables are printed with borders and are fitted to the terminal width: columns shrink only when the line
 does not fit, and in a pipe (stdout is not a terminal) values are printed in full.
@@ -158,6 +161,23 @@ about uncommitted changes; `clean-remote` requires the `delete_repo` scope on th
 just build      # ./git-repos in the repository root
 just install    # ~/.local/bin/git-repos
 ```
+
+### Shell completion
+
+`git-repos completion bash|zsh` prints the completion script: commands, the flags of a command, values
+for `--provider`, `--protocol`, `--timeout`, directories for `-C` and `--into`. For `do`, completion
+after the filters is handed back to the shell, so an ordinary command is completed.
+
+```sh
+git-repos install-completions         # permanently: files + lines in ~/.bashrc and ~/.zshrc
+git-repos install-completions bash    # permanently, bash only
+git-repos uninstall-completions all
+source scripts/enable-completion.sh   # current session only, writes nothing
+```
+
+Details in [docs/completion.en.md](docs/completion.en.md): manual install, what to add to `~/.bashrc`
+and `~/.zshrc`, how the session install differs from the permanent one, and what to do when it does
+not work.
 
 ## Usage
 

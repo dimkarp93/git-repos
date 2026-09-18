@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -22,11 +23,16 @@ type statusResult struct {
 	err     error
 }
 
-func runStatus(args []string) int {
-	opts := options{}
-	fs := newFlagSet("status", &opts)
+func statusFlags(opts *options) *flag.FlagSet {
+	fs := newFlagSet("status", opts)
 	fs.BoolVar(&opts.noProgress, "no-progress", false, "do not show the progress indicator")
 	opts.filters.registerStatus(fs)
+	return fs
+}
+
+func runStatus(args []string) int {
+	opts := options{}
+	fs := statusFlags(&opts)
 	if ok, code := parseFlags(fs, args); !ok {
 		return code
 	}
