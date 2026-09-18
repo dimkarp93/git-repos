@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"flag"
 	"sort"
 	"sync"
 
@@ -16,11 +17,16 @@ type fetchResult struct {
 	Err      error
 }
 
-func runUpdate(args []string) int {
-	opts := options{}
-	fs := newFlagSet("update", &opts)
+func updateFlags(opts *options) *flag.FlagSet {
+	fs := newFlagSet("update", opts)
 	fs.BoolVar(&opts.refresh, "refresh", false, "ignore cached default branches")
 	fs.BoolVar(&opts.noProgress, "no-progress", false, "do not show the progress indicator")
+	return fs
+}
+
+func runUpdate(args []string) int {
+	opts := options{}
+	fs := updateFlags(&opts)
 	if ok, code := parseFlags(fs, args); !ok {
 		return code
 	}

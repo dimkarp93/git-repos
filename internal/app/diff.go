@@ -1,18 +1,24 @@
 package app
 
 import (
+	"flag"
 	"os"
 )
 
-func runDiff(args []string) int {
-	opts := options{}
-	fs := newFlagSet("diff", &opts)
+func diffFlags(opts *options) *flag.FlagSet {
+	fs := newFlagSet("diff", opts)
 	fs.BoolVar(&opts.fetch, "fetch", false, "run git fetch before comparing")
 	fs.BoolVar(&opts.all, "all", false, "show repositories that are in sync too")
 	fs.BoolVar(&opts.refresh, "refresh", false, "ignore cached default branches")
 	fs.BoolVar(&opts.asJSON, "json", false, "print the report as JSON")
 	fs.BoolVar(&opts.noProgress, "no-progress", false, "do not show the progress indicator")
 	opts.filters.registerView(fs)
+	return fs
+}
+
+func runDiff(args []string) int {
+	opts := options{}
+	fs := diffFlags(&opts)
 	if ok, code := parseFlags(fs, args); !ok {
 		return code
 	}

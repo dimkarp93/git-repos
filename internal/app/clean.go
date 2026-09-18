@@ -1,6 +1,7 @@
 package app
 
 import (
+	"flag"
 	"fmt"
 	"os"
 
@@ -8,11 +9,16 @@ import (
 	"github.com/dimkarp93/git-repos/internal/render"
 )
 
-func runCleanLocal(args []string) int {
-	opts := options{}
-	fs := newFlagSet("clean-local", &opts)
+func cleanLocalFlags(opts *options) *flag.FlagSet {
+	fs := newFlagSet("clean-local", opts)
 	fs.BoolVar(&opts.assumeYes, "yes", false, "do not ask, assume yes-to-all")
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "list candidates and delete nothing")
+	return fs
+}
+
+func runCleanLocal(args []string) int {
+	opts := options{}
+	fs := cleanLocalFlags(&opts)
 	if ok, code := parseFlags(fs, args); !ok {
 		return code
 	}
@@ -83,11 +89,16 @@ func (s *session) cleanLocal(candidates []LocalOnly, c *confirmer) (deleted, fai
 	return deleted, failed
 }
 
-func runCleanRemote(args []string) int {
-	opts := options{}
-	fs := newFlagSet("clean-remote", &opts)
+func cleanRemoteFlags(opts *options) *flag.FlagSet {
+	fs := newFlagSet("clean-remote", opts)
 	fs.BoolVar(&opts.assumeYes, "yes", false, "do not ask, assume yes-to-all")
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "list candidates and delete nothing")
+	return fs
+}
+
+func runCleanRemote(args []string) int {
+	opts := options{}
+	fs := cleanRemoteFlags(&opts)
 	if ok, code := parseFlags(fs, args); !ok {
 		return code
 	}

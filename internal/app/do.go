@@ -13,12 +13,17 @@ import (
 	"github.com/dimkarp93/git-repos/internal/render"
 )
 
-func runDo(args []string) int {
-	opts := options{}
-	fs := newFlagSet("do", &opts)
+func doFlags(opts *options) *flag.FlagSet {
+	fs := newFlagSet("do", opts)
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "print what would be run and change nothing")
 	fs.BoolVar(&opts.noProgress, "no-progress", false, "do not show the progress indicator")
 	opts.filters.registerAll(fs)
+	return fs
+}
+
+func runDo(args []string) int {
+	opts := options{}
+	fs := doFlags(&opts)
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return ExitOK

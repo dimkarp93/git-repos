@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"flag"
 	"os"
 	"path/filepath"
 
@@ -20,13 +21,18 @@ type syncAction struct {
 	Plan   bool
 }
 
-func runSync(args []string) int {
-	opts := options{}
-	fs := newFlagSet("sync", &opts)
+func syncFlags(opts *options) *flag.FlagSet {
+	fs := newFlagSet("sync", opts)
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "show what would be done and change nothing")
 	fs.StringVar(&opts.into, "into", "", "directory for cloned repositories (required)")
 	fs.StringVar(&opts.protocol, "protocol", "", "remote protocol for new remotes and clones: ssh or https")
 	fs.BoolVar(&opts.noProgress, "no-progress", false, "do not show the progress indicator")
+	return fs
+}
+
+func runSync(args []string) int {
+	opts := options{}
+	fs := syncFlags(&opts)
 	if ok, code := parseFlags(fs, args); !ok {
 		return code
 	}

@@ -63,17 +63,23 @@ type command struct {
 	name    string
 	summary string
 	run     func(args []string) int
+	flags   func(opts *options) *flag.FlagSet
+	hidden  bool
 }
 
 func commands() []command {
 	return []command{
-		{"diff", "show differences between local repositories and the account", runDiff},
-		{"status", "show the branch and working tree state of local repositories", runStatus},
-		{"do", "run a command inside every selected repository", runDo},
-		{"update", "fetch the default branch in every repository", runUpdate},
-		{"sync", "create missing repositories on both sides", runSync},
-		{"clean-local", "delete local repositories without a remote", runCleanLocal},
-		{"clean-remote", "delete remote repositories without a local copy", runCleanRemote},
+		{name: "diff", summary: "show differences between local repositories and the account", run: runDiff, flags: diffFlags},
+		{name: "status", summary: "show the branch and working tree state of local repositories", run: runStatus, flags: statusFlags},
+		{name: "do", summary: "run a command inside every selected repository", run: runDo, flags: doFlags},
+		{name: "update", summary: "fetch the default branch in every repository", run: runUpdate, flags: updateFlags},
+		{name: "sync", summary: "create missing repositories on both sides", run: runSync, flags: syncFlags},
+		{name: "clean-local", summary: "delete local repositories without a remote", run: runCleanLocal, flags: cleanLocalFlags},
+		{name: "clean-remote", summary: "delete remote repositories without a local copy", run: runCleanRemote, flags: cleanRemoteFlags},
+		{name: "completion", summary: "print the shell completion script for bash or zsh", run: runCompletion, flags: completionFlags},
+		{name: "install-completions", summary: "install the completion script into bash and zsh", run: runInstallCompletions, flags: installCompletionsFlags},
+		{name: "uninstall-completions", summary: "remove the completion script from bash and zsh", run: runUninstallCompletions, flags: uninstallCompletionsFlags},
+		{name: completeCommand, run: runCompleteHidden, hidden: true},
 	}
 }
 
@@ -108,14 +114,24 @@ func Run(args []string) int {
 func usage(w io.Writer) {
 	fmt.Fprintln(w, "usage: git-repos <command> [flags]")
 	fmt.Fprintln(w, "\ncommands:")
+	width := 0
 	for _, cmd := range commands() {
-		fmt.Fprintf(w, "  %-13s %s\n", cmd.name, cmd.summary)
+		if !cmd.hidden && len(cmd.name) > width {
+			width = len(cmd.name)
+		}
+	}
+	for _, cmd := range commands() {
+		if cmd.hidden {
+			continue
+		}
+		fmt.Fprintf(w, "  %-*s %s\n", width, cmd.name, cmd.summary)
 	}
 	fmt.Fprintln(w, "\n"+heading("common flags:"))
 	var opts options
 	fs := newFlagSet("<command>", &opts)
 	printFlags(w, fs, func(string) bool { return true })
 	fmt.Fprintln(w, "\ngit-repos <command> -h shows the flags of that command")
+	fmt.Fprintln(w, "git-repos install-completions sets up completion for bash and zsh")
 }
 
 func newFlagSet(name string, opts *options) *flag.FlagSet {
