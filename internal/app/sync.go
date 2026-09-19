@@ -37,14 +37,14 @@ func runSync(args []string) int {
 		return code
 	}
 	if opts.protocol != "" && opts.protocol != provider.ProtocolSSH && opts.protocol != provider.ProtocolHTTPS {
-		return fail(errors.New("--protocol принимает ssh или https"))
+		return fail(errors.New("--protocol accepts ssh or https"))
 	}
 	if opts.into == "" {
-		return fail(errors.New("нужен --into <dir>: каталог, куда клонировать удалённые репозитории"))
+		return fail(errors.New("--into <dir> is required: the directory to clone remote repositories into"))
 	}
 	into := config.ExpandPath(opts.into)
 	if info, err := os.Stat(into); err != nil || !info.IsDir() {
-		return fail(errors.New("каталог для клонирования недоступен: " + into))
+		return fail(errors.New("clone directory is not accessible: " + into))
 	}
 
 	s, err := start(opts)
@@ -65,9 +65,9 @@ func runSync(args []string) int {
 	cloned := s.cloneMissing(inv, into, opts)
 	s.spinner.Stop()
 
-	report(s, "СОЗДАНО НА "+upperName(s.prov.Name()), pushed)
-	report(s, "ЗАПУШЕНО В ПУСТЫЕ НА "+upperName(s.prov.Name()), filled)
-	report(s, "КЛОНИРОВАНО В "+render.Ellipsis(shortPath(into), maxPathWidth), cloned)
+	report(s, "CREATED ON "+upperName(s.prov.Name()), pushed)
+	report(s, "PUSHED INTO EMPTY ON "+upperName(s.prov.Name()), filled)
+	report(s, "CLONED INTO "+render.Ellipsis(shortPath(into), maxPathWidth), cloned)
 
 	links := make([]string, 0, len(pushed))
 	for _, action := range append(append([]syncAction{}, pushed...), filled...) {
@@ -76,7 +76,7 @@ func runSync(args []string) int {
 		}
 	}
 	if len(links) > 0 {
-		s.printer.Line(render.Bold, "Ссылки на созданные репозитории:")
+		s.printer.Line(render.Bold, "Links to the created repositories:")
 		for _, link := range links {
 			s.printer.Line("", "  %s", link)
 		}
@@ -84,7 +84,7 @@ func runSync(args []string) int {
 	}
 
 	failed := countFailed(pushed) + countFailed(filled) + countFailed(cloned)
-	s.printer.Line("", "Итог: создано — %d · запушено в пустые — %d · клонировано — %d · пропущено с ошибкой — %d",
+	s.printer.Line("", "Summary: created — %d · pushed into empty — %d · cloned — %d · skipped with an error — %d",
 		countDone(pushed), countDone(filled), countDone(cloned), failed)
 	if failed > 0 {
 		return ExitFailure
@@ -94,8 +94,8 @@ func runSync(args []string) int {
 
 func (s *session) pushMissing(inv inventory, opts options) []syncAction {
 	actions := make([]syncAction, 0, len(inv.localOnly))
-	s.pr.setPhase("создание на " + s.prov.Name())
-	s.pr.setUnit("репозиториев")
+	s.pr.setPhase("creating on " + s.prov.Name())
+	s.pr.setUnit("repositories")
 	s.pr.setTotal(countOrphans(inv))
 	for _, item := range inv.localOnly {
 		if !item.Orphan() {
@@ -105,16 +105,16 @@ func (s *session) pushMissing(inv inventory, opts options) []syncAction {
 		action := syncAction{Target: shortPath(item.Path), Detail: item.Name}
 		switch {
 		case item.Owner != "" && item.Owner != inv.account:
-			action.Detail = item.Owner + "/" + item.Name + ": чужой владелец"
+			action.Detail = item.Owner + "/" + item.Name + ": another owner"
 			actions = append(actions, action)
 			continue
 		case nameTaken(inv, inv.account, item.Name):
-			action.Detail = item.Name + ": имя занято, конфликт"
+			action.Detail = item.Name + ": name taken, conflict"
 			actions = append(actions, action)
 			continue
 		}
 		if opts.dryRun {
-			action.Detail = "будет создан приватный " + inv.account + "/" + item.Name
+			action.Detail = "would create a private " + inv.account + "/" + item.Name
 			action.Plan = true
 			actions = append(actions, action)
 			continue
@@ -137,7 +137,7 @@ func (s *session) pushMissing(inv inventory, opts options) []syncAction {
 			continue
 		}
 		if !gitcmd.HasCommits(s.ctx, item.Path) {
-			action.Detail += " (пустой, push пропущен)"
+			action.Detail += " (empty, push skipped)"
 			actions = append(actions, action)
 			continue
 		}
@@ -160,8 +160,8 @@ func (s *session) pushMissing(inv inventory, opts options) []syncAction {
 }
 
 func (s *session) fillEmpty(pairs []matched, opts options) []syncAction {
-	s.pr.setPhase("поиск пустых на " + s.prov.Name())
-	s.pr.setUnit("репозиториев")
+	s.pr.setPhase("looking for empty ones on " + s.prov.Name())
+	s.pr.setUnit("repositories")
 	s.pr.setTotal(len(pairs))
 	actions := make([]syncAction, 0)
 	for i, pair := range pairs {
@@ -180,9 +180,9 @@ func (s *session) fillEmpty(pairs []matched, opts options) []syncAction {
 			continue
 		}
 
-		action := syncAction{Target: shortPath(pair.local.Path), Detail: pair.remote.FullName() + ": удалённый пуст", URL: pair.remote.WebURL}
+		action := syncAction{Target: shortPath(pair.local.Path), Detail: pair.remote.FullName() + ": the remote is empty", URL: pair.remote.WebURL}
 		if opts.dryRun {
-			action.Detail = "будет запушен в пустой " + pair.remote.FullName()
+			action.Detail = "would push into the empty " + pair.remote.FullName()
 			action.Plan = true
 			actions = append(actions, action)
 			continue
@@ -208,20 +208,20 @@ func (s *session) fillEmpty(pairs []matched, opts options) []syncAction {
 
 func (s *session) cloneMissing(inv inventory, into string, opts options) []syncAction {
 	actions := make([]syncAction, 0, len(inv.remoteOnly))
-	s.pr.setPhase("клонирование в " + shortPath(into))
-	s.pr.setUnit("репозиториев")
+	s.pr.setPhase("cloning into " + shortPath(into))
+	s.pr.setUnit("repositories")
 	s.pr.setTotal(len(inv.remoteOnly))
 	for _, item := range inv.remoteOnly {
 		s.pr.step(item.FullName, len(actions))
 		dest := filepath.Join(into, item.repo.Name)
 		action := syncAction{Target: item.FullName, Detail: shortPath(dest), URL: item.WebURL}
 		if _, err := os.Stat(dest); err == nil {
-			action.Detail = shortPath(dest) + ": каталог занят, конфликт"
+			action.Detail = shortPath(dest) + ": directory taken, conflict"
 			actions = append(actions, action)
 			continue
 		}
 		if opts.dryRun {
-			action.Detail = "будет склонирован в " + shortPath(dest)
+			action.Detail = "would clone into " + shortPath(dest)
 			action.Plan = true
 			actions = append(actions, action)
 			continue
@@ -263,14 +263,14 @@ func report(s *session, title string, actions []syncAction) {
 	}
 	rows := make([][]render.Cell, 0, len(actions))
 	for _, action := range actions {
-		status := render.Cell{Text: "пропущено", Color: render.Yellow}
+		status := render.Cell{Text: "skipped", Color: render.Yellow}
 		switch {
 		case action.Err != nil:
-			status = render.Cell{Text: "ошибка: " + errText(action.Err), Color: render.Red}
+			status = render.Cell{Text: "error: " + errText(action.Err), Color: render.Red}
 		case action.Done:
-			status = render.Cell{Text: "готово", Color: render.Green}
+			status = render.Cell{Text: "done", Color: render.Green}
 		case action.Plan:
-			status = render.Cell{Text: "план", Color: render.Grey}
+			status = render.Cell{Text: "plan", Color: render.Grey}
 		}
 		rows = append(rows, []render.Cell{
 			render.Plain(render.Ellipsis(action.Target, maxPathWidth)),
@@ -278,7 +278,7 @@ func report(s *session, title string, actions []syncAction) {
 			status,
 		})
 	}
-	s.printer.Table(title, []string{"ИСТОЧНИК", "НАЗНАЧЕНИЕ", "СТАТУС"}, rows)
+	s.printer.Table(title, []string{"SOURCE", "TARGET", "STATUS"}, rows)
 	s.printer.Line("", "")
 }
 

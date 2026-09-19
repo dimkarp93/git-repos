@@ -95,7 +95,7 @@ func TestCleanLocalWarnsAboutDirtyTree(t *testing.T) {
 	s := newSession(t, bareProvider(t), []string{root}, &out)
 	c := newScriptedConfirmer(strings.NewReader("skip\n"), &out, false)
 	s.cleanLocal([]LocalOnly{{Path: dir, Kind: KindNoOrigin, Reason: "no origin"}}, c)
-	if !strings.Contains(out.String(), "незакоммиченные изменения") {
+	if !strings.Contains(out.String(), "uncommitted changes") {
 		t.Fatalf("no dirty warning: %q", out.String())
 	}
 }

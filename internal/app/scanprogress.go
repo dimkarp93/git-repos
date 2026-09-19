@@ -51,7 +51,7 @@ func newScanEstimate(cfg config.Config, roots []string, store *cache.Cache) *sca
 		if known > 0 {
 			est.byDirs = true
 			est.total = known
-			est.unit = "каталогов"
+			est.unit = "directories"
 			return est
 		}
 	}
@@ -65,7 +65,7 @@ func newScanEstimate(cfg config.Config, roots []string, store *cache.Cache) *sca
 		}
 		est.total += len(names)
 	}
-	est.unit = "поддеревьев"
+	est.unit = "subtrees"
 	return est
 }
 
@@ -153,7 +153,7 @@ func (e *scanEstimate) save(store *cache.Cache) {
 func scanLocal(cfg config.Config, opts options, roots []string, pr *progress, store *cache.Cache) ([]scan.Repo, error) {
 	est := newScanEstimate(cfg, roots, store)
 	if pr != nil {
-		pr.setPhase("локальный скан")
+		pr.setPhase("local scan")
 		pr.setTotal(est.total)
 		pr.setUnit(est.unit)
 	}

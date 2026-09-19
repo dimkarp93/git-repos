@@ -41,7 +41,7 @@ func runCleanLocal(args []string) int {
 		}
 	}
 	if len(candidates) == 0 {
-		s.printer.Line(render.Grey, "Локальных репозиториев без удалённого нет.")
+		s.printer.Line(render.Grey, "No local repositories without a remote.")
 		return ExitOK
 	}
 
@@ -49,7 +49,7 @@ func runCleanLocal(args []string) int {
 		for _, item := range candidates {
 			s.printer.Line(render.Orange, "  %s (%s)", shortPath(item.Path), item.Reason)
 		}
-		s.printer.Line("", "Кандидатов на удаление: %d", len(candidates))
+		s.printer.Line("", "Deletion candidates: %d", len(candidates))
 		return ExitOK
 	}
 
@@ -64,7 +64,7 @@ func runCleanLocal(args []string) int {
 
 func (s *session) cleanLocal(candidates []LocalOnly, c *confirmer) (deleted, failed int) {
 	for _, item := range candidates {
-		prompt := fmt.Sprintf("Удалить локальный репозиторий %s?\n  причина: %s%s",
+		prompt := fmt.Sprintf("Delete the local repository %s?\n  reason: %s%s",
 			shortPath(item.Path), item.Reason, dirtyNote(s, item.Path))
 		ans, err := c.ask(prompt)
 		if err != nil {
@@ -75,16 +75,16 @@ func (s *session) cleanLocal(candidates []LocalOnly, c *confirmer) (deleted, fai
 		case answerSkip:
 			continue
 		case answerQuit:
-			s.printer.Line(render.Grey, "Остановлено пользователем.")
+			s.printer.Line(render.Grey, "Stopped by the user.")
 			return deleted, failed
 		}
 		if err := os.RemoveAll(item.Path); err != nil {
 			failed++
-			s.printer.Line(render.Red, "  ошибка: %v", err)
+			s.printer.Line(render.Red, "  error: %v", err)
 			continue
 		}
 		deleted++
-		s.printer.Line(render.Grey, "  удалено: %s", shortPath(item.Path))
+		s.printer.Line(render.Grey, "  deleted: %s", shortPath(item.Path))
 	}
 	return deleted, failed
 }
@@ -114,7 +114,7 @@ func runCleanRemote(args []string) int {
 		return fail(err)
 	}
 	if len(inv.remoteOnly) == 0 {
-		s.printer.Line(render.Grey, "Удалённых репозиториев без локального нет.")
+		s.printer.Line(render.Grey, "No remote repositories without a local copy.")
 		return ExitOK
 	}
 
@@ -122,7 +122,7 @@ func runCleanRemote(args []string) int {
 		for _, item := range inv.remoteOnly {
 			s.printer.Line(render.Yellow, "  %s", item.FullName)
 		}
-		s.printer.Line("", "Кандидатов на удаление: %d", len(inv.remoteOnly))
+		s.printer.Line("", "Deletion candidates: %d", len(inv.remoteOnly))
 		return ExitOK
 	}
 
@@ -139,12 +139,12 @@ func (s *session) cleanRemote(candidates []RemoteOnly, c *confirmer) (deleted, f
 	for _, item := range candidates {
 		note := ""
 		if item.Archived {
-			note = "\n  репозиторий архивный"
+			note = "\n  the repository is archived"
 		}
 		if item.repo.Private {
-			note += "\n  репозиторий приватный"
+			note += "\n  the repository is private"
 		}
-		prompt := fmt.Sprintf("Удалить %s %s?%s\n  %s", s.prov.Name(), item.FullName, note, item.WebURL)
+		prompt := fmt.Sprintf("Delete %s %s?%s\n  %s", s.prov.Name(), item.FullName, note, item.WebURL)
 		ans, err := c.ask(prompt)
 		if err != nil {
 			s.printer.Line(render.Red, "  %v", err)
@@ -154,19 +154,19 @@ func (s *session) cleanRemote(candidates []RemoteOnly, c *confirmer) (deleted, f
 		case answerSkip:
 			continue
 		case answerQuit:
-			s.printer.Line(render.Grey, "Остановлено пользователем.")
+			s.printer.Line(render.Grey, "Stopped by the user.")
 			return deleted, failed
 		}
 		if err := s.prov.DeleteRepo(s.ctx, item.repo.Owner, item.repo.Name); err != nil {
 			failed++
-			s.printer.Line(render.Red, "  ошибка: %v", err)
+			s.printer.Line(render.Red, "  error: %v", err)
 			if s.ctx.Err() != nil {
 				return deleted, failed
 			}
 			continue
 		}
 		deleted++
-		s.printer.Line(render.Grey, "  удалено: %s", item.FullName)
+		s.printer.Line(render.Grey, "  deleted: %s", item.FullName)
 	}
 	return deleted, failed
 }
@@ -176,9 +176,9 @@ func dirtyNote(s *session, path string) string {
 	if err != nil || !dirty {
 		return ""
 	}
-	return "\n  внимание: есть незакоммиченные изменения"
+	return "\n  warning: there are uncommitted changes"
 }
 
 func printCleanSummary(s *session, deleted, failed int) {
-	s.printer.Line("", "Итог: удалено — %d · ошибок — %d", deleted, failed)
+	s.printer.Line("", "Summary: deleted — %d · errors — %d", deleted, failed)
 }

@@ -17,7 +17,7 @@ const (
 	answerQuit
 )
 
-var errNotInteractive = errors.New("нет терминала для подтверждения, используйте --yes")
+var errNotInteractive = errors.New("no terminal to confirm on, use --yes")
 
 type confirmer struct {
 	in       *bufio.Reader
@@ -64,9 +64,9 @@ func (c *confirmer) ask(prompt string) (answer, error) {
 		case "skip-to-all", "q":
 			return answerQuit, nil
 		case "":
-			fmt.Fprintln(c.out, "  нужно выбрать вариант явно")
+			fmt.Fprintln(c.out, "  pick an option explicitly")
 		default:
-			fmt.Fprintln(c.out, "  неизвестный ответ, выберите один из вариантов")
+			fmt.Fprintln(c.out, "  unknown answer, pick one of the options")
 		}
 	}
 }

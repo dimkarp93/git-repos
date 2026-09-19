@@ -38,10 +38,10 @@ func TestConfirmerRequiresExplicitAnswer(t *testing.T) {
 	if err != nil || got != answerYes {
 		t.Fatalf("ask = %v, %v", got, err)
 	}
-	if !strings.Contains(out.String(), "нужно выбрать вариант явно") {
+	if !strings.Contains(out.String(), "pick an option explicitly") {
 		t.Errorf("no hint for empty answer: %q", out.String())
 	}
-	if !strings.Contains(out.String(), "неизвестный ответ") {
+	if !strings.Contains(out.String(), "unknown answer") {
 		t.Errorf("no hint for unknown answer: %q", out.String())
 	}
 	if strings.Count(out.String(), "[yes | yes-to-all | skip | skip-to-all]") != 4 {

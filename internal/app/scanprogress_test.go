@@ -17,7 +17,7 @@ func TestScanEstimateBuckets(t *testing.T) {
 		}
 	}
 	est := newScanEstimate(config.Default(), []string{root}, nil)
-	if est.total != 3 || est.unit != "поддеревьев" {
+	if est.total != 3 || est.unit != "subtrees" {
 		t.Fatalf("total = %d, unit = %q", est.total, est.unit)
 	}
 	resolved, err := filepath.EvalSymlinks(root)
@@ -48,7 +48,7 @@ func TestScanEstimateUsesCachedDirs(t *testing.T) {
 	store.SetDirs(cache.ScanKey(resolved), 40)
 
 	est := newScanEstimate(config.Default(), []string{root}, store)
-	if !est.byDirs || est.total != 40 || est.unit != "каталогов" {
+	if !est.byDirs || est.total != 40 || est.unit != "directories" {
 		t.Fatalf("est = %+v", est)
 	}
 	if got := est.visit(resolved); got != 1 {

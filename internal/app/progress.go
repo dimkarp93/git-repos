@@ -115,7 +115,7 @@ func (p *progress) label() string {
 	parts := make([]string, 0, 5)
 	head := ""
 	if p.plan > 0 && p.index > 0 {
-		head = fmt.Sprintf("фаза %d/%d · ", p.index, p.plan)
+		head = fmt.Sprintf("phase %d/%d · ", p.index, p.plan)
 	}
 	if p.phase != "" {
 		head += p.phase
@@ -129,16 +129,16 @@ func (p *progress) label() string {
 	switch {
 	case p.total > 0:
 		done := min(p.done, p.total)
-		counts := fmt.Sprintf("%d из %d", done, p.total)
+		counts := fmt.Sprintf("%d of %d", done, p.total)
 		if p.unit != "" {
 			counts += " " + p.unit
 		}
 		parts = append(parts, p.paint(render.Green, fmt.Sprintf("%d%% (%s)", done*100/p.total, counts)))
 	case p.found > 0:
-		parts = append(parts, p.paint(render.Green, fmt.Sprintf("найдено — %d", p.found)))
+		parts = append(parts, p.paint(render.Green, fmt.Sprintf("found — %d", p.found)))
 	}
 	if p.active > 1 {
-		parts = append(parts, p.paint(render.Grey, fmt.Sprintf("в работе — %d", p.active)))
+		parts = append(parts, p.paint(render.Grey, fmt.Sprintf("in flight — %d", p.active)))
 	}
 	return strings.Join(parts, " · ")
 }

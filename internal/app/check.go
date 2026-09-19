@@ -126,7 +126,7 @@ func collect(ctx context.Context, prov provider.Provider, store *cache.Cache, cf
 		return nil, inv, err
 	}
 	pr.setPhase(prov.Name() + " api")
-	pr.setUnit("репозиториев")
+	pr.setUnit("repositories")
 	account, err := prov.Account(ctx)
 	if err != nil {
 		return nil, inv, err
@@ -147,7 +147,7 @@ func collect(ctx context.Context, prov provider.Provider, store *cache.Cache, cf
 	}
 
 	seen := map[string]bool{}
-	pr.setPhase("сопоставление с " + prov.Name())
+	pr.setPhase("matching against " + prov.Name())
 	pr.setTotal(len(locals))
 	for i, local := range locals {
 		pr.step(shortPath(local.Path), i)
@@ -231,7 +231,7 @@ func build(ctx context.Context, prov provider.Provider, store *cache.Cache, root
 func inspectAll(ctx context.Context, prov provider.Provider, store *cache.Cache, pairs []matched, opts options, pr *progress) []Result {
 	results := make([]Result, len(pairs))
 	sem := make(chan struct{}, opts.jobs)
-	pr.setPhase("проверка веток")
+	pr.setPhase("checking branches")
 	pr.setTotal(len(pairs))
 	var wg sync.WaitGroup
 	for i, pair := range pairs {

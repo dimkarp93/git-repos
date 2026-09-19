@@ -23,6 +23,34 @@ type statusResult struct {
 	err     error
 }
 
+type statusMark struct {
+	name  string
+	color string
+	on    func(statusResult) bool
+	want  func(filters) bool
+}
+
+func statusMarks() []statusMark {
+	return []statusMark{
+		{"feature", render.Magenta, func(r statusResult) bool { return r.feature }, func(f filters) bool { return f.feature }},
+		{"in-develop", render.Yellow, func(r statusResult) bool { return r.dirty }, func(f filters) bool { return f.inDevelop }},
+		{"hotfix", render.Red, func(r statusResult) bool { return !r.feature && r.dirty }, func(f filters) bool { return f.hotfix }},
+		{"pushable", render.Green, func(r statusResult) bool { return r.feature && !r.dirty }, func(f filters) bool { return f.pushable }},
+		{"wip", render.Blue, func(r statusResult) bool { return r.feature || r.dirty }, func(f filters) bool { return f.wip }},
+	}
+}
+
+func markCell(res statusResult) render.Cell {
+	marks := statusMarks()
+	parts := make([]render.Cell, 0, len(marks))
+	for _, m := range marks {
+		if m.on(res) {
+			parts = append(parts, render.Cell{Text: "[" + m.name + "]", Color: m.color})
+		}
+	}
+	return render.Multi(parts...)
+}
+
 func statusFlags(opts *options) *flag.FlagSet {
 	fs := newFlagSet("status", opts)
 	fs.BoolVar(&opts.noProgress, "no-progress", false, "do not show the progress indicator")
@@ -60,8 +88,7 @@ func runStatus(args []string) int {
 		}
 		shown++
 		branch := render.Plain(res.branch)
-		feature := render.Cell{}
-		develop := render.Cell{}
+		marks := render.Cell{}
 		switch {
 		case res.err != nil:
 			failed++
@@ -70,38 +97,36 @@ func runStatus(args []string) int {
 			if res.feature {
 				features++
 				branch = render.Cell{Text: res.branch, Color: render.Blue}
-				feature = render.Cell{Text: "[feature]", Color: render.Magenta}
 			}
 			if res.dirty {
 				dirty++
-				develop = render.Cell{Text: "[in develop]", Color: render.Yellow}
 			}
+			marks = markCell(res)
 		}
 		rows = append(rows, []render.Cell{
 			{Text: res.name, Color: render.Bold},
 			branch,
-			feature,
-			develop,
+			marks,
 			{Text: render.Ellipsis(res.path, maxPathWidth), Color: render.Grey},
 		})
 	}
 	if len(rows) == 0 {
 		if opts.filters.any() {
-			s.printer.Line(render.Grey, "Под фильтр %s ничего не попало.", opts.filters.names())
+			s.printer.Line(render.Grey, "Nothing matched the filter %s.", opts.filters.names())
 			return ExitOK
 		}
-		s.printer.Line(render.Grey, "Локальные репозитории не найдены.")
+		s.printer.Line(render.Grey, "No local repositories found.")
 		return ExitOK
 	}
-	s.printer.Table("Состояние локальных репозиториев", []string{"РЕПОЗИТОРИЙ", "ВЕТКА", "СОСТОЯНИЕ", "ИЗМЕНЕНИЯ", "ПУТЬ"}, rows)
-	line := fmt.Sprintf("Итог: репозиториев — %d · %s · %s · ошибок — %d",
+	s.printer.Table("Local repository status", []string{"REPOSITORY", "BRANCH", "MARKS", "PATH"}, rows)
+	line := fmt.Sprintf("Summary: repositories — %d · %s · %s · errors — %d",
 		shown,
-		s.printer.Colored(render.Magenta, fmt.Sprintf("не в дефолтной ветке — %d", features)),
-		s.printer.Colored(render.Yellow, fmt.Sprintf("с изменениями — %d", dirty)),
+		s.printer.Colored(render.Magenta, fmt.Sprintf("not on the default branch — %d", features)),
+		s.printer.Colored(render.Yellow, fmt.Sprintf("with changes — %d", dirty)),
 		failed,
 	)
 	if opts.filters.any() {
-		line += " · фильтр: " + opts.filters.names()
+		line += " · filter: " + opts.filters.names()
 	}
 	s.printer.Line("", "%s", line)
 	if failed > 0 {
@@ -113,7 +138,7 @@ func runStatus(args []string) int {
 func statusAll(ctx context.Context, locals []scan.Repo, opts options, pr *progress) []statusResult {
 	results := make([]statusResult, len(locals))
 	sem := make(chan struct{}, opts.jobs)
-	pr.setPhase("статус репозиториев")
+	pr.setPhase("repository status")
 	pr.setTotal(len(locals))
 	var wg sync.WaitGroup
 	for i, local := range locals {

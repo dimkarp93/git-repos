@@ -31,13 +31,13 @@ func TestSpinnerDrawsLabelAndClearsOnStop(t *testing.T) {
 	counter := 0
 	s.Start(func() string {
 		counter++
-		return "в работе — 3"
+		return "in flight — 3"
 	})
 	time.Sleep(3 * spinnerInterval)
 	s.Stop()
 
 	got := out.String()
-	if !strings.Contains(got, "в работе — 3") {
+	if !strings.Contains(got, "in flight — 3") {
 		t.Fatalf("label missing: %q", got)
 	}
 	if !strings.HasSuffix(got, "\r\x1b[K") {

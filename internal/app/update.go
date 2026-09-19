@@ -52,7 +52,7 @@ func runUpdate(args []string) int {
 		status := render.Cell{Text: "fetched", Color: render.Grey}
 		if res.Err != nil {
 			failed++
-			status = render.Cell{Text: render.Ellipsis("ошибка: "+errText(res.Err), maxDetailWidth), Color: render.Red}
+			status = render.Cell{Text: render.Ellipsis("error: "+errText(res.Err), maxDetailWidth), Color: render.Red}
 		}
 		rows = append(rows, []render.Cell{
 			{Text: res.FullName, Color: render.Bold},
@@ -61,8 +61,8 @@ func runUpdate(args []string) int {
 			{Text: render.Ellipsis(res.Path, maxPathWidth), Color: render.Grey},
 		})
 	}
-	s.printer.Table("Результат fetch", []string{"РЕПОЗИТОРИЙ", "ВЕТКА", "РЕЗУЛЬТАТ", "ПУТЬ"}, rows)
-	s.printer.Line("", "Итог: обновлено — %d, ошибок — %d", len(results)-failed, failed)
+	s.printer.Table("Fetch result", []string{"REPOSITORY", "BRANCH", "RESULT", "PATH"}, rows)
+	s.printer.Line("", "Summary: updated — %d, errors — %d", len(results)-failed, failed)
 	if failed > 0 {
 		return ExitFailure
 	}

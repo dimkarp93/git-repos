@@ -98,10 +98,10 @@ func TestPushMissingSkipsForeignOwnerAndTakenName(t *testing.T) {
 	if len(actions) != 2 {
 		t.Fatalf("actions = %+v", actions)
 	}
-	if !strings.Contains(actions[0].Detail, "чужой владелец") {
+	if !strings.Contains(actions[0].Detail, "another owner") {
 		t.Errorf("actions[0] = %+v", actions[0])
 	}
-	if !strings.Contains(actions[1].Detail, "конфликт") {
+	if !strings.Contains(actions[1].Detail, "conflict") {
 		t.Errorf("actions[1] = %+v", actions[1])
 	}
 	if len(prov.created) != 0 {
@@ -116,7 +116,7 @@ func TestPushMissingDryRun(t *testing.T) {
 	s := newSession(t, prov, []string{root}, &out)
 	inv := inventory{account: "tester", localOnly: []LocalOnly{{Path: filepath.Join(root, "x"), Kind: KindNoOrigin, Owner: "tester", Name: "x"}}}
 	actions := s.pushMissing(inv, options{dryRun: true})
-	if len(actions) != 1 || actions[0].Done || !strings.Contains(actions[0].Detail, "будет создан приватный tester/x") {
+	if len(actions) != 1 || actions[0].Done || !strings.Contains(actions[0].Detail, "would create a private tester/x") {
 		t.Fatalf("actions = %+v", actions)
 	}
 	if len(prov.created) != 0 {
@@ -175,7 +175,7 @@ func TestCloneMissingSkipsOccupiedDirectory(t *testing.T) {
 	s := newSession(t, prov, []string{root}, &out)
 	inv := inventory{remoteOnly: []RemoteOnly{{FullName: "tester/cloud", repo: provider.Repo{Owner: "tester", Name: "cloud"}}}}
 	actions := s.cloneMissing(inv, root, options{})
-	if len(actions) != 1 || actions[0].Done || !strings.Contains(actions[0].Detail, "конфликт") {
+	if len(actions) != 1 || actions[0].Done || !strings.Contains(actions[0].Detail, "conflict") {
 		t.Fatalf("actions = %+v", actions)
 	}
 }
@@ -193,21 +193,21 @@ func TestSyncPhasesReportProgress(t *testing.T) {
 	var out bytes.Buffer
 	s := newSession(t, prov, []string{root}, &out)
 	s.pr.setPlan(5)
-	s.pr.setPhase("локальный скан")
+	s.pr.setPhase("local scan")
 	s.pr.setPhase("github api")
-	s.pr.setPhase("сопоставление")
+	s.pr.setPhase("matching")
 	inv := inventory{
 		account:   "tester",
 		localOnly: []LocalOnly{{Path: solo, Kind: KindNoOrigin, Reason: "no origin", Owner: "tester", Name: "solo"}},
 	}
 
 	s.pushMissing(inv, options{})
-	if got := s.pr.label(); got != "фаза 4/5 · создание на fake · 100% (1 из 1 репозиториев)" {
+	if got := s.pr.label(); got != "phase 4/5 · creating on fake · 100% (1 of 1 repositories)" {
 		t.Fatalf("label = %q", got)
 	}
 
 	s.cloneMissing(inventory{}, root, options{})
-	if got := s.pr.label(); !strings.HasPrefix(got, "фаза 5/5 · клонирование в ") {
+	if got := s.pr.label(); !strings.HasPrefix(got, "phase 5/5 · cloning into ") {
 		t.Fatalf("label = %q", got)
 	}
 }

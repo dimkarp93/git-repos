@@ -84,7 +84,7 @@ func printPresence(p *render.Printer, report Report, f filters) {
 		if f.any() && !f.local && !f.remote {
 			return
 		}
-		p.Line(render.Grey, "Состав репозиториев совпадает.")
+		p.Line(render.Grey, "The repository sets match.")
 		fmt.Fprintln(p.Out)
 		return
 	}
@@ -110,7 +110,7 @@ func printPresence(p *render.Printer, report Report, f filters) {
 		}
 		rows = append(rows, []render.Cell{local, remote})
 	}
-	p.Table("Состав репозиториев", []string{"ТОЛЬКО ЛОКАЛЬНО", "ТОЛЬКО НА УДАЛЁННОМ"}, rows)
+	p.Table("Repository sets", []string{"LOCAL ONLY", "REMOTE ONLY"}, rows)
 	fmt.Fprintln(p.Out)
 }
 
@@ -126,7 +126,7 @@ func printMismatched(p *render.Printer, report Report) {
 			{Text: item.Canonical, Color: render.Grey},
 		})
 	}
-	p.Table("Origin не совпадает с каноничным именем", []string{"ПУТЬ", "ORIGIN", "НА ПРОВАЙДЕРЕ"}, rows)
+	p.Table("Origin does not match the canonical name", []string{"PATH", "ORIGIN", "ON PROVIDER"}, rows)
 	fmt.Fprintln(p.Out)
 }
 
@@ -157,11 +157,11 @@ func printBranches(p *render.Printer, report Report, showAll bool) {
 		if !showAll && len(report.Repos) > 0 {
 			return
 		}
-		p.Line(render.Grey, "Дефолтные ветки синхронны.")
+		p.Line(render.Grey, "Default branches are in sync.")
 		fmt.Fprintln(p.Out)
 		return
 	}
-	p.Table("Состояние дефолтных веток", []string{"РЕПОЗИТОРИЙ", "ВЕТКА", "СТАТУС", "ПОСЛЕДНИЙ FETCH", "ПУТЬ"}, rows)
+	p.Table("Default branch status", []string{"REPOSITORY", "BRANCH", "STATUS", "LAST FETCH", "PATH"}, rows)
 	fmt.Fprintln(p.Out)
 }
 
@@ -170,16 +170,16 @@ func printSummary(p *render.Printer, report Report, f filters) {
 	for _, res := range report.Repos {
 		counts[res.Status]++
 	}
-	line := fmt.Sprintf("Итог: синхронно — %d · %s · %s · %s · только локально — %d · только на удалённом — %d",
+	line := fmt.Sprintf("Summary: in sync — %d · %s · %s · %s · local only — %d · remote only — %d",
 		counts[StatusSynced],
-		p.Colored(render.Orange, fmt.Sprintf("нужен pull — %d", counts[StatusPull])),
-		p.Colored(render.Yellow, fmt.Sprintf("нужен push — %d", counts[StatusPush])),
-		p.Colored(render.Red, fmt.Sprintf("конфликтов — %d", counts[StatusConflict])),
+		p.Colored(render.Orange, fmt.Sprintf("need pull — %d", counts[StatusPull])),
+		p.Colored(render.Yellow, fmt.Sprintf("need push — %d", counts[StatusPush])),
+		p.Colored(render.Red, fmt.Sprintf("conflicts — %d", counts[StatusConflict])),
 		len(report.LocalOnly),
 		len(report.RemoteOnly),
 	)
 	if f.any() {
-		line += " · фильтр: " + f.names()
+		line += " · filter: " + f.names()
 	}
 	p.Line("", "%s", line)
 }

@@ -286,7 +286,7 @@ func TestListReposProgress(t *testing.T) {
 	if sink.total != 4 || sink.done != 4 {
 		t.Fatalf("total = %d, done = %d", sink.total, sink.done)
 	}
-	if len(sink.notes) == 0 || sink.notes[len(sink.notes)-1] != "список репозиториев, страница 2" {
+	if len(sink.notes) == 0 || sink.notes[len(sink.notes)-1] != "repository list, page 2" {
 		t.Fatalf("notes = %q", sink.notes)
 	}
 }

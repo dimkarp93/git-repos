@@ -79,7 +79,7 @@ func TestExecAllContinuesAfterFailure(t *testing.T) {
 	if !strings.Contains(text, "[1/2] :: a") || !strings.Contains(text, "[2/2] :: b") {
 		t.Fatalf("out = %q", text)
 	}
-	if !strings.Contains(text, "выполнено — 0, ошибок — 2") {
+	if !strings.Contains(text, "done — 0, errors — 2") {
 		t.Fatalf("out = %q", text)
 	}
 }

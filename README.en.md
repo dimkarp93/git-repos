@@ -47,20 +47,26 @@ Status colors:
 | `ahead → push` | yellow | the remote one is behind |
 | `synced` | grey | nothing (shown only with `--all`) |
 
-If `origin` differs from the canonical name, a separate table `ORIGIN НЕ СОВПАДАЕТ С КАНОНИЧНЫМ
-ИМЕНЕМ` is printed, and in the status table the name is shown as `owner/canonical (origin: owner/from-origin)`.
+If `origin` differs from the canonical name, a separate table `ORIGIN DOES NOT MATCH THE CANONICAL
+NAME` is printed, and in the status table the name is shown as `owner/canonical (origin: owner/from-origin)`.
 `origin` itself is not changed.
 
-The `ПОСЛЕДНИЙ FETCH` column is highlighted: ≥ 3 days — yellow, ≥ 10 — orange, ≥ 30 or `never` — red.
+The `LAST FETCH` column is highlighted: ≥ 3 days — yellow, ≥ 10 — orange, ≥ 30 or `never` — red.
 
 ### status
 
 Walks the local repositories (no provider and no token needed) and prints the branch of each one,
-followed by marks:
+followed by a `MARKS` column. It lists **every** mark that applies to the repository, each in its own
+color, and each one matches the filter of the same name:
 
 - `[feature]` in magenta, with the branch name in blue — HEAD is not on the default branch (the default comes from `refs/remotes/origin/HEAD`,
   otherwise from the local `main`/`master`); a detached HEAD is shown as `detached` and marked as well;
-- `[in develop]` in yellow — the working tree has uncommitted changes or untracked files.
+- `[in-develop]` in yellow — the working tree has uncommitted changes or untracked files;
+- `[hotfix]` in red — there are changes, but the repository sits on the default branch;
+- `[pushable]` in green — a feature branch with a clean working tree;
+- `[wip]` in blue — at least one of the two: a feature branch **or** changes.
+
+The marks do not exclude each other, so a row usually reads `[feature] [pushable] [wip]`.
 
 Exit codes: `0` — success, `2` — some repositories could not be read.
 
@@ -80,13 +86,12 @@ overlap, so `do` accepts all of them at once.
 | `--failed` | diff, do | could not be compared: `error`, `unknown`, `no local branch` |
 | `--feature` | status, do | HEAD is not on the default branch |
 | `--in-develop` | status, do | uncommitted or untracked files |
-| `--wip` | status, do | both marks at once: `[feature]` **and** `[in develop]` |
+| `--wip` | status, do | `[feature]` **or** `[in-develop]` |
 | `--hotfix` | status, do | changes exist but the repository sits on the default branch |
 | `--pushable` | status, do | a feature branch with a clean working tree |
 
-Several filters at once are **OR** — the union of the selections (`--wip` itself requires both marks).
-A table with no filter of its own is not printed: `diff --behind` shows only the branch table. The
-summary line gets `· фильтр: --behind, --wip` appended and counts the displayed rows. The exit code of
+Several filters at once are **OR** — the union of the selections. A table with no filter of its own is not printed: `diff --behind` shows only the branch table. The
+summary line gets `· filter: --behind, --wip` appended and counts the displayed rows. The exit code of
 `diff` is still computed from the **full** report: it answers "are there differences at all", not
 "in this selection".
 
@@ -121,7 +126,7 @@ Exit codes: `0` — every command succeeded or the selection was empty, `2` — 
 
 `git fetch origin <default-branch>` across all matched repositories, in parallel (`--jobs`).
 While it works, a spinner runs on stderr: first "searching repositories and requesting the list",
-then `fetch · dimkarp93/git-repos · 40% (4 из 10) · в работе — 8`. The spinner is enabled only when stderr is a terminal
+then `fetch · dimkarp93/git-repos · 40% (4 of 10) · in flight — 8`. The spinner is enabled only when stderr is a terminal
 and is removed by `--no-progress`, so output stays clean in pipes and logs.
 
 ### sync
@@ -137,10 +142,10 @@ and is removed by `--no-progress`, so output stays clean in pipes and logs.
 - Conflicts are skipped: the name is already taken on the account, the target directory exists, the
   origin owner is not you, the remote points at another host. `--dry-run` shows the plan and changes nothing.
 
-While it works, a spinner on stderr shows the phases: `фаза 1/6 · локальный скан`, `фаза 2/6 · github api`,
-`фаза 3/6 · сопоставление с github`, `фаза 4/6 · создание на github · 50% (1 из 2 репозиториев)`,
-`фаза 5/6 · поиск пустых на github · 100% (12 из 12 репозиториев)`,
-`фаза 6/6 · клонирование в ~/tools · 100% (3 из 3 репозиториев)`. It is removed by `--no-progress`.
+While it works, a spinner on stderr shows the phases: `phase 1/6 · local scan`, `phase 2/6 · github api`,
+`phase 3/6 · matching against github`, `phase 4/6 · creating on github · 50% (1 of 2 repositories)`,
+`phase 5/6 · looking for empty ones on github · 100% (12 of 12 repositories)`,
+`phase 6/6 · cloning into ~/tools · 100% (3 of 3 repositories)`. It is removed by `--no-progress`.
 
 ### clean-local / clean-remote
 
@@ -251,18 +256,18 @@ Default branches are cached in `<cache_dir>/defaults.json` (TTL 7 days). The cac
 
 The percentage is always within a phase; there is no overall percentage, and the phase number is printed
 as `n/N`. In the spinner line the phase number and name are **bold**, the percentage and the ratio are
-green, and the current item and the `в работе` counter are grey (colors are disabled by `--no-color` and
+green, and the current item and the `in flight` counter are grey (colors are disabled by `--no-color` and
 `NO_COLOR`).
 
 - **local scan**: if a root has a directory count from the previous run, the percentage is based on it
-  (`26407 из 27471 каталогов`); for a new root it is based on the first-level subtrees, listed with a
-  single `readdir` before the walk (`3 из 17 поддеревьев`). The directory count is written to the cache
+  (`26407 of 27471 directories`); for a new root it is based on the first-level subtrees, listed with a
+  single `readdir` before the walk (`3 of 17 subtrees`). The directory count is written to the cache
   at the end of the walk, so from the second run on the percentage is smooth.
 - **github api**: the total repository count comes from `GET /user` (`public_repos + total_private_repos`,
   a request that is made anyway for the account name); without those counters the `Link` header's
   `rel="last"` is used and the percentage is counted in pages.
 - **matching**, **branch check**, **fetch**, **status**: processed repositories out of the total. In the
-  parallel phases `done` only grows on finished items, so `в работе — N` is printed next to it.
+  parallel phases `done` only grows on finished items, so `in flight — N` is printed next to it.
 
 ## A new provider
 

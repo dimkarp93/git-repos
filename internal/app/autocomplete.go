@@ -23,7 +23,7 @@ var completionShells = []string{"bash", "zsh"}
 
 var completionTargets = []string{"bash", "zsh", "all"}
 
-const /completionMarker = "# git-repos completion (git-repos install-completions)"
+const completionMarker = "# git-repos completion (git-repos install-completions)"
 
 func completionFlags(opts *options) *flag.FlagSet {
 	return newFlagSet("completion <shell>", opts)
@@ -40,7 +40,7 @@ func runCompletion(args []string) int {
 	}
 	rest := fs.Args()
 	if len(rest) != 1 {
-		fmt.Fprintf(os.Stderr, "git-repos: completion принимает один аргумент: %s\n", strings.Join(completionShells, " или "))
+		fmt.Fprintf(os.Stderr, "git-repos: completion takes exactly one argument: %s\n", strings.Join(completionShells, " or "))
 		return ExitFailure
 	}
 	switch rest[0] {
@@ -49,7 +49,7 @@ func runCompletion(args []string) int {
 	case "zsh":
 		fmt.Print(zshScript)
 	default:
-		fmt.Fprintf(os.Stderr, "git-repos: неизвестный шелл %q, доступны: %s\n", rest[0], strings.Join(completionShells, ", "))
+		fmt.Fprintf(os.Stderr, "git-repos: unknown shell %q, available: %s\n", rest[0], strings.Join(completionShells, ", "))
 		return ExitFailure
 	}
 	return ExitOK
@@ -352,7 +352,7 @@ func runCompletionSetup(args []string, flags func(*options) *flag.FlagSet, unins
 		}
 	}
 	if len(free) > 1 {
-		fmt.Fprintf(os.Stderr, "git-repos: лишние аргументы: %s\n", strings.Join(free[1:], " "))
+		fmt.Fprintf(os.Stderr, "git-repos: extra arguments: %s\n", strings.Join(free[1:], " "))
 		return ExitFailure
 	}
 	target := shellFromEnv(os.Getenv("SHELL"))
@@ -360,7 +360,7 @@ func runCompletionSetup(args []string, flags func(*options) *flag.FlagSet, unins
 		target = free[0]
 	}
 	if !slices.Contains(completionTargets, target) {
-		fmt.Fprintf(os.Stderr, "git-repos: неизвестный шелл %q, доступны: %s\n", target, strings.Join(completionTargets, ", "))
+		fmt.Fprintf(os.Stderr, "git-repos: unknown shell %q, available: %s\n", target, strings.Join(completionTargets, ", "))
 		return ExitFailure
 	}
 
@@ -381,7 +381,7 @@ func runCompletionSetup(args []string, flags func(*options) *flag.FlagSet, unins
 		}
 	}
 	if !uninstall && !opts.dryRun {
-		fmt.Println("Откройте новый шелл или выполните: exec $SHELL -l")
+		fmt.Println("Open a new shell or run: exec $SHELL -l")
 	}
 	return ExitOK
 }
@@ -416,7 +416,7 @@ func shellFromEnv(value string) string {
 
 func addCompletion(file, script, rc, line string, dryRun bool) error {
 	if dryRun {
-		fmt.Printf("Будет записан: %s\n", file)
+		fmt.Printf("Would write: %s\n", file)
 	} else {
 		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
 			return err
@@ -424,19 +424,19 @@ func addCompletion(file, script, rc, line string, dryRun bool) error {
 		if err := os.WriteFile(file, []byte(script), 0o644); err != nil {
 			return err
 		}
-		fmt.Printf("Установлено: %s\n", file)
+		fmt.Printf("Installed: %s\n", file)
 	}
 	return updateRC(rc, line, dryRun)
 }
 
 func removeCompletion(file, rc string, dryRun bool) error {
 	if dryRun {
-		fmt.Printf("Будет удалён: %s\n", file)
+		fmt.Printf("Would remove: %s\n", file)
 	} else {
 		if err := os.Remove(file); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
-		fmt.Printf("Удалено: %s\n", file)
+		fmt.Printf("Removed: %s\n", file)
 	}
 	return cleanRC(rc, dryRun)
 }
@@ -449,19 +449,19 @@ func updateRC(rc, line string, dryRun bool) error {
 	next, action := applyRCLine(text, line)
 	switch action {
 	case rcSame:
-		fmt.Printf("Уже есть в %s\n", rc)
+		fmt.Printf("Already present in %s\n", rc)
 		return nil
 	case rcReplaced:
-		fmt.Printf("Заменена прежняя строка в %s\n", rc)
+		fmt.Printf("Replaced the previous line in %s\n", rc)
 	}
 	if dryRun {
-		fmt.Printf("Будет дописано в %s: %s\n", rc, line)
+		fmt.Printf("Would append to %s: %s\n", rc, line)
 		return nil
 	}
 	if err := os.WriteFile(rc, []byte(next), mode); err != nil {
 		return err
 	}
-	fmt.Printf("Дописано в %s: %s\n", rc, line)
+	fmt.Printf("Appended to %s: %s\n", rc, line)
 	return nil
 }
 
@@ -472,17 +472,17 @@ func cleanRC(rc string, dryRun bool) error {
 	}
 	next, removed := stripMarked(text)
 	if !removed {
-		fmt.Printf("В %s строки с меткой нет, если правили её вручную — уберите сами\n", rc)
+		fmt.Printf("No marked line in %s, if you edited it by hand remove it yourself\n", rc)
 		return nil
 	}
 	if dryRun {
-		fmt.Printf("Будет убрана строка с меткой из %s\n", rc)
+		fmt.Printf("Would remove the marked line from %s\n", rc)
 		return nil
 	}
 	if err := os.WriteFile(rc, []byte(next), mode); err != nil {
 		return err
 	}
-	fmt.Printf("Убрана строка с меткой из %s\n", rc)
+	fmt.Printf("Removed the marked line from %s\n", rc)
 	return nil
 }
 

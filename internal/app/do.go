@@ -32,7 +32,7 @@ func runDo(args []string) int {
 	}
 	action := fs.Args()
 	if len(action) == 0 {
-		fmt.Fprintln(os.Stderr, "git-repos: не указана команда, например: git-repos do --in-develop git status -s")
+		fmt.Fprintln(os.Stderr, "git-repos: no command given, for example: git-repos do --in-develop git status -s")
 		return ExitFailure
 	}
 	explicit := map[string]bool{}
@@ -41,7 +41,7 @@ func runDo(args []string) int {
 		opts.timeout = 0
 	}
 	if explicit["jobs"] {
-		fmt.Fprintln(os.Stderr, "git-repos: do всегда выполняется последовательно, -jobs игнорируется")
+		fmt.Fprintln(os.Stderr, "git-repos: do always runs sequentially, -jobs is ignored")
 	}
 
 	s, err := startFor(opts, opts.filters.anyView())
@@ -59,9 +59,9 @@ func runDo(args []string) int {
 	}
 	if len(targets) == 0 {
 		if opts.filters.any() {
-			s.printer.Line(render.Grey, "Под фильтр %s ничего не попало.", opts.filters.names())
+			s.printer.Line(render.Grey, "Nothing matched the filter %s.", opts.filters.names())
 		} else {
-			s.printer.Line(render.Grey, "Локальные репозитории не найдены.")
+			s.printer.Line(render.Grey, "No local repositories found.")
 		}
 		return ExitOK
 	}
@@ -80,7 +80,7 @@ func execAll(s *session, targets []string, script string) int {
 	var failedDirs []string
 	for i, dir := range targets {
 		if s.ctx.Err() != nil {
-			fmt.Fprintf(os.Stderr, "git-repos: прервано, осталось %d репозиториев\n", len(targets)-i)
+			fmt.Fprintf(os.Stderr, "git-repos: interrupted, %d repositories left\n", len(targets)-i)
 			break
 		}
 		s.printer.Line("", "%s %s",
@@ -91,10 +91,10 @@ func execAll(s *session, targets []string, script string) int {
 			fmt.Fprintf(os.Stderr, "git-repos: exit %d\n", code)
 		}
 	}
-	line := fmt.Sprintf("Итог: выполнено — %d, ошибок — %d", len(targets)-len(failedDirs), len(failedDirs))
+	line := fmt.Sprintf("Summary: done — %d, errors — %d", len(targets)-len(failedDirs), len(failedDirs))
 	s.printer.Line("", "%s", line)
 	if len(failedDirs) > 0 {
-		s.printer.Line(render.Red, "Упали: %s", strings.Join(failedDirs, ", "))
+		s.printer.Line(render.Red, "Failed: %s", strings.Join(failedDirs, ", "))
 		return ExitFailure
 	}
 	return ExitOK
@@ -192,7 +192,7 @@ func selectRepos(s *session, opts options) ([]string, error) {
 		}
 	}
 	if opts.filters.remote && len(inv.remoteOnly) > 0 {
-		fmt.Fprintf(os.Stderr, "git-repos: %d репозиториев есть только на удалённом, локальной копии нет — пропущены\n", len(inv.remoteOnly))
+		fmt.Fprintf(os.Stderr, "git-repos: %d repositories exist only on the remote with no local copy — skipped\n", len(inv.remoteOnly))
 	}
 	for _, res := range inspectAll(s.ctx, s.prov, s.store, pairs, opts, s.pr) {
 		if opts.filters.matchResult(res) {

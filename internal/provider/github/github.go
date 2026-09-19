@@ -73,7 +73,7 @@ func (c *Client) Account(ctx context.Context) (string, error) {
 		PublicRepos       int    `json:"public_repos"`
 		TotalPrivateRepos int    `json:"total_private_repos"`
 	}
-	c.note("владелец токена")
+	c.note("token owner")
 	if _, err := c.get(ctx, c.baseURL+"/user", &user); err != nil {
 		return "", err
 	}
@@ -108,13 +108,13 @@ func (c *Client) ListRepos(ctx context.Context) ([]provider.Repo, error) {
 			return nil, err
 		}
 		if last := lastPage(link); last > 0 {
-			c.note("список репозиториев, страница %d из %d", pageNum, last)
+			c.note("repository list, page %d of %d", pageNum, last)
 			if c.progress != nil && c.owned == 0 {
 				c.progress.Total(last)
 				c.progress.Done(pageNum)
 			}
 		} else {
-			c.note("список репозиториев, страница %d", pageNum)
+			c.note("repository list, page %d", pageNum)
 		}
 		for _, r := range page {
 			out = append(out, provider.Repo{

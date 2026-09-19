@@ -28,9 +28,23 @@ const minColumnWidth = 12
 type Cell struct {
 	Text  string
 	Color string
+	Parts []Cell
 }
 
 func Plain(text string) Cell { return Cell{Text: text} }
+
+func Multi(parts ...Cell) Cell {
+	kept := make([]Cell, 0, len(parts))
+	texts := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part.Text == "" {
+			continue
+		}
+		kept = append(kept, part)
+		texts = append(texts, part.Text)
+	}
+	return Cell{Text: strings.Join(texts, " "), Parts: kept}
+}
 
 type Printer struct {
 	Out   io.Writer
@@ -120,9 +134,20 @@ func (p *Printer) row(cells []Cell, widths []int) string {
 			cell = cells[i]
 		}
 		text := Ellipsis(cell.Text, width)
-		out = append(out, " "+p.paint(cell.Color, text)+strings.Repeat(" ", gap(text, width))+" ")
+		out = append(out, " "+p.paintCell(cell, text)+strings.Repeat(" ", gap(text, width))+" ")
 	}
 	return "│" + strings.Join(out, "│") + "│"
+}
+
+func (p *Printer) paintCell(cell Cell, text string) string {
+	if len(cell.Parts) == 0 || text != cell.Text {
+		return p.paint(cell.Color, text)
+	}
+	painted := make([]string, 0, len(cell.Parts))
+	for _, part := range cell.Parts {
+		painted = append(painted, p.paint(part.Color, part.Text))
+	}
+	return strings.Join(painted, " ")
 }
 
 func (p *Printer) titleLine(title string, widths []int) string {

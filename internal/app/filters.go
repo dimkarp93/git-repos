@@ -41,7 +41,7 @@ func (f *filters) registerView(fs *flag.FlagSet) {
 func (f *filters) registerStatus(fs *flag.FlagSet) {
 	fs.BoolVar(&f.feature, "feature", false, "keep repositories that are not on the default branch")
 	fs.BoolVar(&f.inDevelop, "in-develop", false, "keep repositories with uncommitted or untracked files")
-	fs.BoolVar(&f.wip, "wip", false, "keep repositories that are both [feature] and [in develop]")
+	fs.BoolVar(&f.wip, "wip", false, "keep repositories that are [feature] or [in-develop]")
 	fs.BoolVar(&f.hotfix, "hotfix", false, "keep repositories with changes on the default branch")
 	fs.BoolVar(&f.pushable, "pushable", false, "keep repositories on a feature branch with a clean tree")
 }
@@ -126,17 +126,10 @@ func (f filters) matchStatus(res statusResult) bool {
 	if !f.any() {
 		return true
 	}
-	if f.wip && res.feature && res.dirty {
-		return true
+	for _, m := range statusMarks() {
+		if m.want(f) && m.on(res) {
+			return true
+		}
 	}
-	if f.hotfix && !res.feature && res.dirty {
-		return true
-	}
-	if f.pushable && res.feature && !res.dirty {
-		return true
-	}
-	if f.feature && res.feature {
-		return true
-	}
-	return f.inDevelop && res.dirty
+	return false
 }
