@@ -18,12 +18,14 @@ type filters struct {
 	wip       bool
 	hotfix    bool
 	pushable  bool
+	branch    string
+	project   string
 }
 
 var filterFlags = map[string]bool{
 	"local": true, "remote": true, "behind": true, "ahead": true, "synced": true,
 	"conflict": true, "failed": true, "feature": true, "in-develop": true, "wip": true,
-	"hotfix": true, "pushable": true,
+	"hotfix": true, "pushable": true, "branch": true, "project": true,
 }
 
 func isFilterFlag(name string) bool { return filterFlags[name] }
@@ -46,6 +48,11 @@ func (f *filters) registerStatus(fs *flag.FlagSet) {
 	fs.BoolVar(&f.pushable, "pushable", false, "keep repositories on a feature branch with a clean tree")
 }
 
+func (f *filters) registerName(fs *flag.FlagSet) {
+	fs.StringVar(&f.branch, "branch", "", "keep repositories whose branch contains this substring (case-insensitive)")
+	fs.StringVar(&f.project, "project", "", "keep repositories whose name contains this substring (case-insensitive)")
+}
+
 func (f *filters) registerAll(fs *flag.FlagSet) {
 	f.registerView(fs)
 	f.registerStatus(fs)
@@ -59,7 +66,26 @@ func (f filters) anyStatus() bool {
 	return f.feature || f.inDevelop || f.wip || f.hotfix || f.pushable
 }
 
-func (f filters) any() bool { return f.anyView() || f.anyStatus() }
+func (f filters) anyName() bool { return f.branch != "" || f.project != "" }
+
+func (f filters) any() bool { return f.anyView() || f.anyStatus() || f.anyName() }
+
+func (f filters) matchName(name, branch string) bool {
+	if f.project != "" && !strings.Contains(strings.ToLower(name), strings.ToLower(f.project)) {
+		return false
+	}
+	if f.branch != "" && !strings.Contains(strings.ToLower(branch), strings.ToLower(f.branch)) {
+		return false
+	}
+	return true
+}
+
+func repoName(fullName string) string {
+	if idx := strings.LastIndex(fullName, "/"); idx >= 0 {
+		return fullName[idx+1:]
+	}
+	return fullName
+}
 
 func (f filters) names() string {
 	pairs := []struct {
@@ -79,11 +105,17 @@ func (f filters) names() string {
 		{f.hotfix, "--hotfix"},
 		{f.pushable, "--pushable"},
 	}
-	out := make([]string, 0, len(pairs))
+	out := make([]string, 0, len(pairs)+2)
 	for _, pair := range pairs {
 		if pair.on {
 			out = append(out, pair.name)
 		}
+	}
+	if f.project != "" {
+		out = append(out, "--project="+f.project)
+	}
+	if f.branch != "" {
+		out = append(out, "--branch="+f.branch)
 	}
 	return strings.Join(out, ", ")
 }
@@ -103,7 +135,10 @@ func (f filters) matchRemoteOnly() bool {
 }
 
 func (f filters) matchResult(res Result) bool {
-	if !f.any() {
+	if !f.matchName(repoName(res.FullName), res.Branch) {
+		return false
+	}
+	if !f.anyView() && !f.anyStatus() {
 		return true
 	}
 	switch res.Status {
@@ -123,7 +158,10 @@ func (f filters) matchResult(res Result) bool {
 }
 
 func (f filters) matchStatus(res statusResult) bool {
-	if !f.any() {
+	if !f.matchName(res.name, res.branch) {
+		return false
+	}
+	if !f.anyStatus() && !f.anyView() {
 		return true
 	}
 	for _, m := range statusMarks() {
