@@ -13,6 +13,7 @@ func diffFlags(opts *options) *flag.FlagSet {
 	fs.BoolVar(&opts.asJSON, "json", false, "print the report as JSON")
 	fs.BoolVar(&opts.noProgress, "no-progress", false, "do not show the progress indicator")
 	opts.filters.registerView(fs)
+	opts.filters.registerName(fs)
 	return fs
 }
 

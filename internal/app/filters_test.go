@@ -65,6 +65,49 @@ func TestFiltersMatchStatus(t *testing.T) {
 	}
 }
 
+func TestFiltersMatchName(t *testing.T) {
+	repo := Result{FullName: "acme/git-repos", Branch: "main"}
+	cases := []struct {
+		name string
+		f    filters
+		want bool
+	}{
+		{"без фильтра имени", filters{}, true},
+		{"project совпадает по подстроке", filters{project: "repos"}, true},
+		{"project не совпадает", filters{project: "other"}, false},
+		{"project не ловит owner", filters{project: "acme"}, false},
+		{"project без учёта регистра", filters{project: "REPOS"}, true},
+		{"branch совпадает по подстроке", filters{branch: "mai"}, true},
+		{"branch не совпадает", filters{branch: "dev"}, false},
+		{"project и branch вместе", filters{project: "repos", branch: "main"}, true},
+		{"project и branch — один не совпал", filters{project: "repos", branch: "dev"}, false},
+	}
+	for _, tc := range cases {
+		if got := tc.f.matchResult(repo); got != tc.want {
+			t.Errorf("%s: matchResult = %v", tc.name, got)
+		}
+	}
+}
+
+func TestFiltersMatchNameStatus(t *testing.T) {
+	res := statusResult{name: "git-repos", branch: "feature/x"}
+	cases := []struct {
+		name string
+		f    filters
+		want bool
+	}{
+		{"project совпадает", filters{project: "repos"}, true},
+		{"project не совпадает", filters{project: "other"}, false},
+		{"branch совпадает по подстроке", filters{branch: "feature"}, true},
+		{"branch не совпадает", filters{branch: "main"}, false},
+	}
+	for _, tc := range cases {
+		if got := tc.f.matchStatus(res); got != tc.want {
+			t.Errorf("%s: matchStatus = %v", tc.name, got)
+		}
+	}
+}
+
 func TestFilterReportKeepsOnlySelected(t *testing.T) {
 	report := Report{
 		LocalOnly:  []LocalOnly{{Path: "/a"}},
@@ -98,6 +141,9 @@ func TestFilterReportKeepsOnlySelected(t *testing.T) {
 
 func TestFiltersNames(t *testing.T) {
 	if got := (filters{behind: true, wip: true}).names(); got != "--behind, --wip" {
+		t.Fatalf("names = %q", got)
+	}
+	if got := (filters{behind: true, project: "acme", branch: "main"}).names(); got != "--behind, --project=acme, --branch=main" {
 		t.Fatalf("names = %q", got)
 	}
 }

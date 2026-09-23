@@ -55,6 +55,7 @@ func statusFlags(opts *options) *flag.FlagSet {
 	fs := newFlagSet("status", opts)
 	fs.BoolVar(&opts.noProgress, "no-progress", false, "do not show the progress indicator")
 	opts.filters.registerStatus(fs)
+	opts.filters.registerName(fs)
 	return fs
 }
 
