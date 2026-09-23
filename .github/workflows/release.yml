@@ -9,7 +9,11 @@ permissions:
 
 jobs:
   release:
+    if: github.server_url == 'https://github.com'
     runs-on: ubuntu-latest
+    env:
+      GOWORK: "off"
+      GOFLAGS: -mod=vendor
     steps:
       - uses: actions/checkout@v4
         with:
@@ -57,6 +61,15 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Check vendor
+        if: steps.tagcheck.outputs.exists == 'false'
+        run: |
+          go mod vendor
+          if [ -n "$(git status --porcelain -- go.mod go.sum vendor/ | tee /dev/stderr)" ]; then
+            echo "vendor/ does not match go.mod - run: just vendor" >&2
+            exit 1
+          fi
+
       - name: Run tests
         if: steps.tagcheck.outputs.exists == 'false'
         run: go test ./...
@@ -73,11 +86,6 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          if [ -d "cmd/${BIN}" ]; then
-            pkg="./cmd/${BIN}"
-          else
-            pkg="."
-          fi
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
             os=${target%/*}
             arch=${target#*/}
@@ -87,7 +95,7 @@ jobs:
             CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
               go build -trimpath \
                 -ldflags="-s -w -X main.version=${VERSION} -X main.origin=${ORIGIN} -X main.upstream=${UPSTREAM} -X main.commit=${COMMIT} -X main.channel=${CHANNEL}" \
-                -o "$tmp/${BIN}" "$pkg"
+                -o "$tmp/${BIN}" "./cmd/${BIN}"
             chmod +x "$tmp/${BIN}"
             tar -C "$tmp" -czf "$out" "${BIN}"
             rm -rf "$tmp"

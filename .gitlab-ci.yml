@@ -1,0 +1,81 @@
+release:
+  image: golang:1
+  rules:
+    - if: '$CI_SERVER_HOST == "gitlab.com" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  variables:
+    CGO_ENABLED: "0"
+    GOWORK: "off"
+    GOFLAGS: -mod=vendor
+    GOTOOLCHAIN: auto
+    CHANNEL: gitlab-release
+  script:
+    - |
+      set -eu
+      if [ ! -f versions.txt ]; then
+        echo "versions.txt not found" >&2
+        exit 1
+      fi
+      VERSION=$(tr -d '[:space:]' < versions.txt)
+      if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+        echo "versions.txt must contain semver X.Y.Z (got: '$VERSION')" >&2
+        exit 1
+      fi
+      TAG="v$VERSION"
+      BIN="$CI_PROJECT_NAME"
+      ORIGIN="${CI_PROJECT_URL%/}"
+      if [ -f upstream.txt ]; then
+        UPSTREAM=$(tr -d '[:space:]' < upstream.txt)
+      else
+        UPSTREAM="$ORIGIN"
+      fi
+      COMMIT=$(printf '%s' "$CI_COMMIT_SHA" | cut -c1-7)
+      API="$CI_API_V4_URL/projects/$CI_PROJECT_ID"
+
+      if curl -fsS -o /dev/null -H "JOB-TOKEN: $CI_JOB_TOKEN" "$API/releases/$TAG" 2>/dev/null; then
+        echo "Release $TAG already exists - skipping the release"
+        exit 0
+      fi
+
+      go mod vendor
+      if [ -n "$(git status --porcelain -- go.mod go.sum vendor/ | tee /dev/stderr)" ]; then
+        echo "vendor/ does not match go.mod - run: just vendor" >&2
+        exit 1
+      fi
+
+      go test ./...
+
+      mkdir -p dist
+      for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+        os=${target%/*}
+        arch=${target#*/}
+        name="${BIN}-${os}-${arch}"
+        out="dist/${name}.tar.gz"
+        tmp=$(mktemp -d)
+        GOOS="$os" GOARCH="$arch" \
+          go build -trimpath \
+            -ldflags="-s -w -X main.version=${VERSION} -X main.origin=${ORIGIN} -X main.upstream=${UPSTREAM} -X main.commit=${COMMIT} -X main.channel=${CHANNEL}" \
+            -o "$tmp/${BIN}" "./cmd/${BIN}"
+        chmod +x "$tmp/${BIN}"
+        tar -C "$tmp" -czf "$out" "${BIN}"
+        rm -rf "$tmp"
+      done
+      (cd dist && sha256sum *.tar.gz > SHA256SUMS)
+      ls -la dist
+
+      pkg_url="$API/packages/generic/${BIN}/${VERSION}"
+      links=""
+      for f in dist/*; do
+        file=$(basename "$f")
+        echo "Uploading $file"
+        curl -fsS -H "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file "$f" "$pkg_url/$file" >/dev/null
+        link=$(printf '{"name":"%s","url":"%s/%s","direct_asset_path":"/%s","link_type":"package"}' \
+          "$file" "$pkg_url" "$file" "$file")
+        links="${links:+$links,}$link"
+      done
+      body=$(printf '{"tag_name":"%s","ref":"%s","name":"%s","description":"Automated release %s from versions.txt","assets":{"links":[%s]}}' \
+        "$TAG" "$CI_COMMIT_SHA" "$TAG" "$TAG" "$links")
+      curl -fsS -X POST "$API/releases" \
+        -H "JOB-TOKEN: $CI_JOB_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "$body" >/dev/null
+      echo "Release $TAG created"
