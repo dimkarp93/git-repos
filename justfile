@@ -75,7 +75,7 @@ uninstall:
 
 [group('release')]
 [doc('raise the patch version in versions.txt')]
-bump-patch:
+bump-patch: && (_bump-commit "patch")
     #!/usr/bin/env sh
     set -eu
     v=$(tr -d '[:space:]' < {{version_file}})
@@ -87,7 +87,7 @@ bump-patch:
 
 [group('release')]
 [doc('raise the minor version, reset patch')]
-bump-minor:
+bump-minor: && (_bump-commit "minor")
     #!/usr/bin/env sh
     set -eu
     v=$(tr -d '[:space:]' < {{version_file}})
@@ -99,7 +99,7 @@ bump-minor:
 
 [group('release')]
 [doc('raise the major version, reset minor and patch')]
-bump-major:
+bump-major: && (_bump-commit "major")
     #!/usr/bin/env sh
     set -eu
     v=$(tr -d '[:space:]' < {{version_file}})
@@ -108,6 +108,24 @@ bump-major:
     EOF
     printf '%s.0.0\n' "$((MAJ + 1))" > {{version_file}}
     cat {{version_file}}
+
+_bump-commit level:
+    #!/usr/bin/env sh
+    set -eu
+    v=$(tr -d '[:space:]' < versions.txt)
+    if git rev-parse -q --verify "refs/tags/v$v" >/dev/null; then
+        git checkout -- versions.txt
+        echo "tag v$v already exists" >&2
+        exit 1
+    fi
+    git commit -q -m "bump {{level}}" -- versions.txt
+    git tag "v$v"
+    rc=0
+    for r in $(git remote); do
+        git push -q "$r" HEAD --tags || { echo "push to $r failed" >&2; rc=1; }
+    done
+    echo "Tagged v$v"
+    exit "$rc"
 
 vendor:
     GOWORK=off go mod tidy

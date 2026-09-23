@@ -1,7 +1,7 @@
 release:
   image: golang:1
   rules:
-    - if: '$CI_SERVER_HOST == "gitlab.com" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_SERVER_HOST == "gitlab.com" && $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
   variables:
     CGO_ENABLED: "0"
     GOWORK: "off"
@@ -11,16 +11,8 @@ release:
   script:
     - |
       set -eu
-      if [ ! -f versions.txt ]; then
-        echo "versions.txt not found" >&2
-        exit 1
-      fi
-      VERSION=$(tr -d '[:space:]' < versions.txt)
-      if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-        echo "versions.txt must contain semver X.Y.Z (got: '$VERSION')" >&2
-        exit 1
-      fi
-      TAG="v$VERSION"
+      TAG="$CI_COMMIT_TAG"
+      VERSION="${TAG#v}"
       BIN="$CI_PROJECT_NAME"
       ORIGIN="${CI_PROJECT_URL%/}"
       if [ -f upstream.txt ]; then
@@ -30,11 +22,6 @@ release:
       fi
       COMMIT=$(printf '%s' "$CI_COMMIT_SHA" | cut -c1-7)
       API="$CI_API_V4_URL/projects/$CI_PROJECT_ID"
-
-      if curl -fsS -o /dev/null -H "JOB-TOKEN: $CI_JOB_TOKEN" "$API/releases/$TAG" 2>/dev/null; then
-        echo "Release $TAG already exists - skipping the release"
-        exit 0
-      fi
 
       go mod vendor
       if [ -n "$(git status --porcelain -- go.mod go.sum vendor/ | tee /dev/stderr)" ]; then
@@ -72,8 +59,8 @@ release:
           "$file" "$pkg_url" "$file" "$file")
         links="${links:+$links,}$link"
       done
-      body=$(printf '{"tag_name":"%s","ref":"%s","name":"%s","description":"Automated release %s from versions.txt","assets":{"links":[%s]}}' \
-        "$TAG" "$CI_COMMIT_SHA" "$TAG" "$TAG" "$links")
+      body=$(printf '{"tag_name":"%s","name":"%s","description":"Automated release %s","assets":{"links":[%s]}}' \
+        "$TAG" "$TAG" "$TAG" "$links")
       curl -fsS -X POST "$API/releases" \
         -H "JOB-TOKEN: $CI_JOB_TOKEN" \
         -H "Content-Type: application/json" \

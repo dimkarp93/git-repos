@@ -2,7 +2,7 @@ name: Release
 
 on:
   push:
-    branches: [main, master]
+    tags: ['v*']
 
 permissions:
   contents: write
@@ -16,19 +16,14 @@ jobs:
       GOFLAGS: -mod=vendor
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Read version
         id: ver
         run: |
-          if [ ! -f versions.txt ]; then
-            echo "versions.txt not found" >&2
-            exit 1
-          fi
-          v=$(tr -d '[:space:]' < versions.txt)
-          if ! echo "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "versions.txt must contain semver X.Y.Z (got: '$v')" >&2
+          tag="${GITHUB_REF#refs/tags/}"
+          v="${tag#v}"
+          if ! echo "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "the tag must be vX.Y.Z (got: '$tag')" >&2
             exit 1
           fi
           bin="${{ github.event.repository.name }}"
@@ -45,24 +40,12 @@ jobs:
           echo "upstream=$upstream"  >> "$GITHUB_OUTPUT"
           echo "commit=$(printf '%s' "$GITHUB_SHA" | cut -c1-7)" >> "$GITHUB_OUTPUT"
 
-      - name: Check tag existence
-        id: tagcheck
-        run: |
-          if git rev-parse "refs/tags/${{ steps.ver.outputs.tag }}" >/dev/null 2>&1; then
-            echo "Tag ${{ steps.ver.outputs.tag }} already exists - skipping the release"
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Setup Go
-        if: steps.tagcheck.outputs.exists == 'false'
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
       - name: Check vendor
-        if: steps.tagcheck.outputs.exists == 'false'
         run: |
           go mod vendor
           if [ -n "$(git status --porcelain -- go.mod go.sum vendor/ | tee /dev/stderr)" ]; then
@@ -71,11 +54,9 @@ jobs:
           fi
 
       - name: Run tests
-        if: steps.tagcheck.outputs.exists == 'false'
         run: go test ./...
 
       - name: Build archives
-        if: steps.tagcheck.outputs.exists == 'false'
         env:
           BIN: ${{ steps.ver.outputs.bin }}
           VERSION: ${{ steps.ver.outputs.version }}
@@ -104,12 +85,10 @@ jobs:
           ls -la dist
 
       - name: Create release
-        if: steps.tagcheck.outputs.exists == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ steps.ver.outputs.tag }}" \
             --title "${{ steps.ver.outputs.tag }}" \
-            --target "${{ github.sha }}" \
-            --notes "Automated release ${{ steps.ver.outputs.tag }} from versions.txt" \
+            --notes "Automated release ${{ steps.ver.outputs.tag }}" \
             dist/*
