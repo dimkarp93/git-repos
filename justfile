@@ -1,5 +1,7 @@
 bin := "git-repos"
 version_file := "versions.txt"
+export GOWORK := "off"
+export GOFLAGS := "-mod=vendor"
 
 _default:
     @just --list
@@ -35,9 +37,9 @@ vet:
     go vet ./...
 
 [group('check')]
-[doc('run gofmt -w over the tree')]
+[doc('run go fmt ./... (vendor/ is skipped)')]
 fmt:
-    gofmt -l -w .
+    go fmt ./...
 
 [group('check')]
 [doc('run vet and test')]
@@ -106,3 +108,11 @@ bump-major:
     EOF
     printf '%s.0.0\n' "$((MAJ + 1))" > {{version_file}}
     cat {{version_file}}
+
+vendor:
+    GOWORK=off go mod tidy
+    GOWORK=off go mod vendor
+
+vendor-check:
+    GOWORK=off go mod vendor
+    test -z "$(git status --porcelain -- go.mod go.sum vendor/ | tee /dev/stderr)"
