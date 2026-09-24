@@ -13,6 +13,7 @@ shows what is out of sync.
 | `status` | shows the branch and the working tree state of local repositories |
 | `update` | runs `git fetch` of the default branch in every matched repository, with a spinner showing how many repositories are in flight; local branches are not moved |
 | `ff` | fast-forwards the default branch to the fetched `origin/<branch>`, prints commands to resolve a diverged history |
+| `push` | pushes the default branch when it is ahead of origin, setting the upstream to the same-named branch if missing |
 | `sync` | creates what is missing on either side: a private GitHub repository for local ones and `git clone` for remote ones |
 | `clean-local` | deletes local repositories that have no remote |
 | `clean-remote` | deletes remote repositories that have no local copy |
@@ -153,6 +154,18 @@ It does not touch the network: run `update` first, then `ff`. When the branch is
 
 Exit codes: `0` — no conflicts or errors, `2` — a conflict or an error.
 
+### push
+
+Pushes the default branch to `origin` when it is ahead of `origin/<default-branch>`, which resolves `ahead → push`
+from `diff` with one command. If the branch has no upstream, it is set to `origin/<same branch>`. If the branch does not
+exist on origin yet, it is created. It never force-pushes.
+
+- `pushed +N` — the branch was pushed, `, upstream set` — the upstream was set as well; `up to date` — nothing to push;
+  `behind +N → ff` — the branch is behind, `ff` moves it.
+- `conflict` — the histories have diverged: nothing is pushed, the same hints as in `ff` are printed.
+
+Exit codes: `0` — no conflicts or errors, `2` — a conflict or an error.
+
 ### sync
 
 - A local repository without an origin (or with an origin pointing at a non-existent repository of
@@ -218,6 +231,7 @@ git-repos diff -C ~/tools --fetch
 git-repos status -C ~/tools
 git-repos update -C ~/tools
 git-repos ff -C ~/tools
+git-repos push -C ~/tools
 git-repos sync -C ~/tools --into ~/tools --dry-run
 git-repos clean-local -C ~/tools
 git-repos clean-remote --yes
@@ -239,10 +253,10 @@ Common to all commands: `-C <dir>` (repeatable), `--provider github`, `--depth N
 | `--fetch` | diff | run `git fetch origin <branch>` before comparing |
 | `--all` | diff | show repositories that are in sync too |
 | `--json` | diff | machine-readable output |
-| `--refresh` | diff, update, ff | ignore the default branch cache (the file is still refreshed with new data) |
+| `--refresh` | diff, update, ff, push | ignore the default branch cache (the file is still refreshed with new data) |
 | `--no-cache` | all | never read from or write to the cache; the file on disk is left alone |
 | `--clear-cache` | all | delete the cache file before running and fill it again |
-| `--no-progress` | diff, status, update, ff, sync, do | do not show the spinner |
+| `--no-progress` | diff, status, update, ff, push, sync, do | do not show the spinner |
 | `--dry-run` | sync, clean-*, do | show the plan, change nothing |
 | filters | diff, status, do | see the "Filters" section |
 | `--into <dir>` | sync | **required**: directory to clone into |

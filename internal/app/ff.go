@@ -15,27 +15,33 @@ import (
 type ffOutcome string
 
 const (
-	ffForwarded ffOutcome = "forwarded"
-	ffUpToDate  ffOutcome = "up-to-date"
-	ffAhead     ffOutcome = "ahead"
-	ffConflict  ffOutcome = "conflict"
-	ffSkipped   ffOutcome = "skipped"
-	ffError     ffOutcome = "error"
+	ffForwarded  ffOutcome = "forwarded"
+	ffPushed     ffOutcome = "pushed"
+	ffUpToDate   ffOutcome = "up-to-date"
+	ffAhead      ffOutcome = "ahead"
+	ffBehind     ffOutcome = "behind"
+	ffNotFetched ffOutcome = "not-fetched"
+	ffConflict   ffOutcome = "conflict"
+	ffSkipped    ffOutcome = "skipped"
+	ffError      ffOutcome = "error"
 )
 
 type ffResult struct {
-	FullName   string
-	Path       string
-	dir        string
-	Branch     string
-	Outcome    ffOutcome
-	LocalSHA   string
-	RemoteSHA  string
-	Ahead      int
-	Behind     int
-	CheckedOut bool
-	Detail     string
+	FullName    string
+	Path        string
+	dir         string
+	Branch      string
+	Outcome     ffOutcome
+	LocalSHA    string
+	RemoteSHA   string
+	Ahead       int
+	Behind      int
+	CheckedOut  bool
+	UpstreamSet bool
+	Detail      string
 }
+
+type branchAction func(ctx context.Context, dir, branch string) ffResult
 
 func ffFlags(opts *options) *flag.FlagSet {
 	fs := newFlagSet("ff", opts)
@@ -45,8 +51,12 @@ func ffFlags(opts *options) *flag.FlagSet {
 }
 
 func runFF(args []string) int {
+	return runBranchAction("ff", ffFlags, fastForward, printFF, args)
+}
+
+func runBranchAction(phase string, flags func(*options) *flag.FlagSet, action branchAction, print func(*render.Printer, []ffResult) int, args []string) int {
 	opts := options{}
-	fs := ffFlags(&opts)
+	fs := flags(&opts)
 	if ok, code := parseFlags(fs, args); !ok {
 		return code
 	}
@@ -63,13 +73,26 @@ func runFF(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	results := ffAll(s.ctx, s, pairs, opts, s.pr)
+	results := forEachDefault(s.ctx, s, pairs, opts, s.pr, phase, action)
 	s.spinner.Stop()
 
-	return printFF(s.printer, results)
+	return print(s.printer, results)
 }
 
 func printFF(p *render.Printer, results []ffResult) int {
+	counts := printBranchTable(p, "Fast-forward result", results)
+	p.Line("", "Summary: %s · up to date — %d · %s · %s · skipped — %d · %s",
+		p.Colored(render.Green, fmt.Sprintf("fast-forwarded — %d", counts[ffForwarded])),
+		counts[ffUpToDate],
+		p.Colored(render.Orange, fmt.Sprintf("ahead — %d", counts[ffAhead])),
+		p.Colored(render.Red, fmt.Sprintf("conflicts — %d", counts[ffConflict])),
+		counts[ffSkipped],
+		p.Colored(render.Red, fmt.Sprintf("errors — %d", counts[ffError])),
+	)
+	return finishBranchResults(p, results, counts)
+}
+
+func printBranchTable(p *render.Printer, title string, results []ffResult) map[ffOutcome]int {
 	rows := make([][]render.Cell, 0, len(results))
 	counts := map[ffOutcome]int{}
 	for _, res := range results {
@@ -81,15 +104,11 @@ func printFF(p *render.Printer, results []ffResult) int {
 			{Text: render.Ellipsis(res.Path, maxPathWidth), Color: render.Grey},
 		})
 	}
-	p.Table("Fast-forward result", []string{"REPOSITORY", "BRANCH", "RESULT", "PATH"}, rows)
-	p.Line("", "Summary: %s · up to date — %d · %s · %s · skipped — %d · %s",
-		p.Colored(render.Green, fmt.Sprintf("fast-forwarded — %d", counts[ffForwarded])),
-		counts[ffUpToDate],
-		p.Colored(render.Orange, fmt.Sprintf("ahead — %d", counts[ffAhead])),
-		p.Colored(render.Red, fmt.Sprintf("conflicts — %d", counts[ffConflict])),
-		counts[ffSkipped],
-		p.Colored(render.Red, fmt.Sprintf("errors — %d", counts[ffError])),
-	)
+	p.Table(title, []string{"REPOSITORY", "BRANCH", "RESULT", "PATH"}, rows)
+	return counts
+}
+
+func finishBranchResults(p *render.Printer, results []ffResult, counts map[ffOutcome]int) int {
 	for _, res := range results {
 		if res.Outcome == ffConflict {
 			printConflict(p, res)
@@ -105,10 +124,21 @@ func ffCell(res ffResult) render.Cell {
 	switch res.Outcome {
 	case ffForwarded:
 		return render.Cell{Text: fmt.Sprintf("fast-forwarded +%d", res.Behind), Color: render.Green}
+	case ffPushed:
+		text := fmt.Sprintf("pushed +%d", res.Ahead)
+		if res.RemoteSHA == "" {
+			text = "pushed"
+		}
+		if res.UpstreamSet {
+			text += ", upstream set"
+		}
+		return render.Cell{Text: text, Color: render.Green}
 	case ffUpToDate:
 		return render.Cell{Text: "up to date", Color: render.Grey}
 	case ffAhead:
 		return render.Cell{Text: fmt.Sprintf("ahead +%d → push", res.Ahead), Color: render.Orange}
+	case ffBehind:
+		return render.Cell{Text: fmt.Sprintf("behind +%d → ff", res.Behind), Color: render.Orange}
 	case ffConflict:
 		return render.Cell{Text: fmt.Sprintf("conflict: +%d local, +%d origin", res.Ahead, res.Behind), Color: render.Red}
 	case ffSkipped:
@@ -144,7 +174,7 @@ func printConflict(p *render.Printer, res ffResult) {
 	} else {
 		code(g + "branch -f " + b + " " + origin)
 	}
-	p.Line(render.Grey, "  These commands are only suggestions, ff does not run them.")
+	p.Line(render.Grey, "  These commands are only suggestions, git-repos does not run them.")
 }
 
 func shortSHA(sha string) string {
@@ -154,10 +184,10 @@ func shortSHA(sha string) string {
 	return sha
 }
 
-func ffAll(ctx context.Context, s *session, pairs []matched, opts options, pr *progress) []ffResult {
+func forEachDefault(ctx context.Context, s *session, pairs []matched, opts options, pr *progress, phase string, action branchAction) []ffResult {
 	results := make([]ffResult, len(pairs))
 	sem := make(chan struct{}, max(opts.jobs, 1))
-	pr.setPhase("fast-forward")
+	pr.setPhase(phase)
 	pr.setTotal(len(pairs))
 
 	var wg sync.WaitGroup
@@ -176,7 +206,7 @@ func ffAll(ctx context.Context, s *session, pairs []matched, opts options, pr *p
 			if pair.originName != "" {
 				name += " (origin: " + pair.originName + ")"
 			}
-			res := fastForward(ctx, pair.local.Path, branch)
+			res := action(ctx, pair.local.Path, branch)
 			res.FullName = name
 			res.Path = shortPath(pair.local.Path)
 			results[i] = res
@@ -187,7 +217,7 @@ func ffAll(ctx context.Context, s *session, pairs []matched, opts options, pr *p
 	return results
 }
 
-func fastForward(ctx context.Context, dir, branch string) ffResult {
+func compareDefault(ctx context.Context, dir, branch string) ffResult {
 	res := ffResult{dir: dir, Branch: branch}
 	if branch == "" {
 		return res.fail(errDefaultBranchUnknown)
@@ -201,16 +231,18 @@ func fastForward(ctx context.Context, dir, branch string) ffResult {
 	if err != nil {
 		return res.fail(err)
 	}
+	res.LocalSHA = local
+	current, _ := gitcmd.CurrentBranch(ctx, dir)
+	res.CheckedOut = current == branch
 	remote, err := gitcmd.RevParse(ctx, dir, "refs/remotes/origin/"+branch)
 	if errors.Is(err, gitcmd.ErrNoRef) {
-		res.Outcome = ffError
-		res.Detail = "origin/" + branch + " not fetched, run update"
+		res.Outcome = ffNotFetched
 		return res
 	}
 	if err != nil {
 		return res.fail(err)
 	}
-	res.LocalSHA, res.RemoteSHA = local, remote
+	res.RemoteSHA = remote
 	if local == remote {
 		res.Outcome = ffUpToDate
 		return res
@@ -221,16 +253,29 @@ func fastForward(ctx context.Context, dir, branch string) ffResult {
 	if res.Behind, err = gitcmd.CountCommits(ctx, dir, local, remote); err != nil {
 		return res.fail(err)
 	}
-	current, _ := gitcmd.CurrentBranch(ctx, dir)
-	res.CheckedOut = current == branch
 	switch {
 	case res.Ahead > 0 && res.Behind > 0:
 		res.Outcome = ffConflict
-		return res
 	case res.Ahead > 0:
 		res.Outcome = ffAhead
+	default:
+		res.Outcome = ffBehind
+	}
+	return res
+}
+
+func fastForward(ctx context.Context, dir, branch string) ffResult {
+	res := compareDefault(ctx, dir, branch)
+	switch res.Outcome {
+	case ffNotFetched:
+		res.Outcome = ffError
+		res.Detail = "origin/" + branch + " not fetched, run update"
+		return res
+	case ffBehind:
+	default:
 		return res
 	}
+	var err error
 	if res.CheckedOut {
 		err = gitcmd.MergeFFOnly(ctx, dir, "refs/remotes/origin/"+branch)
 	} else {

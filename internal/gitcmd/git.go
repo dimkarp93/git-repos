@@ -180,6 +180,21 @@ func Push(ctx context.Context, dir, remote, branch string) error {
 	return err
 }
 
+func PushBranch(ctx context.Context, dir, remote, branch string, setUpstream bool) error {
+	args := []string{"push", "--quiet"}
+	if setUpstream {
+		args = append(args, "--set-upstream")
+	}
+	args = append(args, remote, "refs/heads/"+branch+":refs/heads/"+branch)
+	_, _, err := run(ctx, dir, args...)
+	return err
+}
+
+func Upstream(ctx context.Context, dir, branch string) (string, error) {
+	out, _, err := run(ctx, dir, "for-each-ref", "--format=%(upstream:short)", "refs/heads/"+branch)
+	return out, err
+}
+
 func Clone(ctx context.Context, parent, url, name, branch string) error {
 	args := []string{"clone", "--quiet"}
 	if branch != "" {
