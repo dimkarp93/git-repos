@@ -11,7 +11,8 @@ shows what is out of sync.
 | --- | --- |
 | `diff` | shows the differences |
 | `status` | shows the branch and the working tree state of local repositories |
-| `update` | runs `git fetch` of the default branch in every matched repository, with a spinner showing how many repositories are in flight |
+| `update` | runs `git fetch` of the default branch in every matched repository, with a spinner showing how many repositories are in flight; local branches are not moved |
+| `ff` | fast-forwards the default branch to the fetched `origin/<branch>`, prints commands to resolve a diverged history |
 | `sync` | creates what is missing on either side: a private GitHub repository for local ones and `git clone` for remote ones |
 | `clean-local` | deletes local repositories that have no remote |
 | `clean-remote` | deletes remote repositories that have no local copy |
@@ -135,6 +136,23 @@ While it works, a spinner runs on stderr: first "searching repositories and requ
 then `fetch · dimkarp93/git-repos · 40% (4 of 10) · in flight — 8`. The spinner is enabled only when stderr is a terminal
 and is removed by `--no-progress`, so output stays clean in pipes and logs.
 
+`update` only fetches: local branches stay where they are, and `diff` keeps showing `behind → pull`.
+Run `ff` to move the default branch.
+
+### ff
+
+Fast-forwards the local default branch to the already fetched `origin/<default-branch>`, nothing but fast-forward.
+It does not touch the network: run `update` first, then `ff`. When the branch is checked out it runs `git merge --ff-only`
+(git refuses if that would overwrite uncommitted changes), otherwise the branch is moved without touching the working tree.
+
+- `fast-forwarded +N` — the branch was moved; `up to date` — nothing to move; `ahead +N → push` — local commits are not pushed yet.
+- `conflict` — the histories have diverged. The branch is left alone, and after the table every such repository gets a
+  "Version conflict" block with ready-made commands for three options: merge the histories; keep the local history
+  (`push --force-with-lease`); keep the origin history (a backup branch + `reset --hard` or `branch -f`).
+  The commands are only printed — deciding and running them is up to you.
+
+Exit codes: `0` — no conflicts or errors, `2` — a conflict or an error.
+
 ### sync
 
 - A local repository without an origin (or with an origin pointing at a non-existent repository of
@@ -199,6 +217,7 @@ git-repos -h                       # list of commands and common flags
 git-repos diff -C ~/tools --fetch
 git-repos status -C ~/tools
 git-repos update -C ~/tools
+git-repos ff -C ~/tools
 git-repos sync -C ~/tools --into ~/tools --dry-run
 git-repos clean-local -C ~/tools
 git-repos clean-remote --yes
@@ -220,10 +239,10 @@ Common to all commands: `-C <dir>` (repeatable), `--provider github`, `--depth N
 | `--fetch` | diff | run `git fetch origin <branch>` before comparing |
 | `--all` | diff | show repositories that are in sync too |
 | `--json` | diff | machine-readable output |
-| `--refresh` | diff, update | ignore the default branch cache (the file is still refreshed with new data) |
+| `--refresh` | diff, update, ff | ignore the default branch cache (the file is still refreshed with new data) |
 | `--no-cache` | all | never read from or write to the cache; the file on disk is left alone |
 | `--clear-cache` | all | delete the cache file before running and fill it again |
-| `--no-progress` | diff, status, update, sync, do | do not show the spinner |
+| `--no-progress` | diff, status, update, ff, sync, do | do not show the spinner |
 | `--dry-run` | sync, clean-*, do | show the plan, change nothing |
 | filters | diff, status, do | see the "Filters" section |
 | `--into <dir>` | sync | **required**: directory to clone into |

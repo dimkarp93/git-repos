@@ -73,6 +73,7 @@ func commands() []command {
 		{name: "status", summary: "show the branch and working tree state of local repositories", run: runStatus, flags: statusFlags},
 		{name: "do", summary: "run a command inside every selected repository", run: runDo, flags: doFlags},
 		{name: "update", summary: "fetch the default branch in every repository", run: runUpdate, flags: updateFlags},
+		{name: "ff", summary: "fast-forward the default branch to the fetched origin branch", run: runFF, flags: ffFlags},
 		{name: "sync", summary: "create missing repositories on both sides", run: runSync, flags: syncFlags},
 		{name: "clean-local", summary: "delete local repositories without a remote", run: runCleanLocal, flags: cleanLocalFlags},
 		{name: "clean-remote", summary: "delete remote repositories without a local copy", run: runCleanRemote, flags: cleanRemoteFlags},

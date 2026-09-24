@@ -92,6 +92,28 @@ func Fetch(ctx context.Context, dir, remote, branch string) error {
 	return err
 }
 
+func MergeFFOnly(ctx context.Context, dir, ref string) error {
+	_, _, err := run(ctx, dir, "merge", "--ff-only", "--quiet", ref)
+	return err
+}
+
+func FastForwardBranch(ctx context.Context, dir, remote, branch string) error {
+	_, _, err := run(ctx, dir, "fetch", "--quiet", ".", "refs/remotes/"+remote+"/"+branch+":refs/heads/"+branch)
+	return err
+}
+
+func CountCommits(ctx context.Context, dir, from, to string) (int, error) {
+	out, _, err := run(ctx, dir, "rev-list", "--count", from+".."+to)
+	if err != nil {
+		return 0, err
+	}
+	var n int
+	if _, err := fmt.Sscanf(out, "%d", &n); err != nil {
+		return 0, fmt.Errorf("git rev-list --count: %q: %w", out, err)
+	}
+	return n, nil
+}
+
 func GitDir(ctx context.Context, dir string) (string, error) {
 	out, _, err := run(ctx, dir, "rev-parse", "--absolute-git-dir")
 	return out, err
