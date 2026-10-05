@@ -17,6 +17,7 @@ shows what is out of sync.
 | `sync` | creates what is missing on either side: a private GitHub repository for local ones and `git clone` for remote ones |
 | `clean-local` | deletes local repositories that have no remote |
 | `clean-remote` | deletes remote repositories that have no local copy |
+| `rename` | renames a repository locally (directory) and on the account (`<old-name> <new-name>`, or interactively without arguments) and updates `origin` |
 | `do` | runs a command inside every selected repository, one at a time |
 | `completion` | prints the shell completion script for bash or zsh |
 | `install-completions` | installs the completion into bash and zsh |
@@ -196,6 +197,26 @@ For every repository a question with no default answer is asked:
 `skip` — skip this one and keep asking; `skip-to-all` — leave the command. The `--yes` flag is equivalent
 to `yes-to-all` from the first repository, `--dry-run` prints the list of candidates. `clean-local` warns
 about uncommitted changes; `clean-remote` requires the `delete_repo` scope on the token.
+
+### rename
+
+```
+git-repos rename <old-name> <new-name>
+git-repos rename
+```
+
+The short name is the last path segment: the directory name locally and the repository name on the account.
+Before doing anything the command checks that exactly one local and exactly one remote repository have the old
+name, that they are linked through `origin`, and that the new name is valid (letters, digits, `-`, `_`, `.`) and
+does not clash with any local or remote short name. Then it renames the repository on the account, updates
+`origin` (keeping its ssh/https form) and renames the directory next to the old one. It requires a token that is
+allowed to administer the repository.
+
+Without arguments an interactive mode starts (a terminal is required). The input field filters by substring the
+list of repositories that exist both locally and remotely under the same name (at most 20 shown, the most recently
+changed first) in a table of two 30-character columns. `↓`/`↑` move the selection, `Enter` picks the repository,
+`Esc` prints `Operation cancelled` and exits. Then the new name is entered (the current name is pre-filled);
+a validation error is shown in red and disappears on any key, `Esc` returns to the repository selection.
 
 ## Installation
 

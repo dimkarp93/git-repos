@@ -75,6 +75,7 @@ func commands() []command {
 		{name: "update", summary: "fetch the default branch in every repository", run: runUpdate, flags: updateFlags},
 		{name: "ff", summary: "fast-forward the default branch to the fetched origin branch", run: runFF, flags: ffFlags},
 		{name: "push", summary: "push the default branch when it is ahead, setting the upstream if missing", run: runPush, flags: pushFlags},
+		{name: "rename", summary: "rename a repository locally and on the account", run: runRename, flags: renameFlags},
 		{name: "sync", summary: "create missing repositories on both sides", run: runSync, flags: syncFlags},
 		{name: "clean-local", summary: "delete local repositories without a remote", run: runCleanLocal, flags: cleanLocalFlags},
 		{name: "clean-remote", summary: "delete remote repositories without a local copy", run: runCleanRemote, flags: cleanRemoteFlags},
