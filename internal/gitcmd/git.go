@@ -145,6 +145,25 @@ func LastFetch(ctx context.Context, dir string) (time.Time, bool) {
 	return newest, true
 }
 
+func LastActivity(ctx context.Context, dir string) time.Time {
+	gitDir, err := GitDir(ctx, dir)
+	if err != nil {
+		return time.Time{}
+	}
+	var newest time.Time
+	for _, path := range []string{
+		filepath.Join(gitDir, "HEAD"),
+		filepath.Join(gitDir, "index"),
+		filepath.Join(gitDir, "FETCH_HEAD"),
+		filepath.Join(gitDir, "logs", "HEAD"),
+	} {
+		if info, err := os.Stat(path); err == nil && info.ModTime().After(newest) {
+			newest = info.ModTime()
+		}
+	}
+	return newest
+}
+
 func CurrentBranch(ctx context.Context, dir string) (string, error) {
 	out, _, err := run(ctx, dir, "symbolic-ref", "--quiet", "--short", "HEAD")
 	if err != nil {

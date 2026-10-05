@@ -290,3 +290,41 @@ func TestListReposProgress(t *testing.T) {
 		t.Fatalf("notes = %q", sink.notes)
 	}
 }
+
+func TestRenameRepo(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		fmt.Fprint(w, `{"name":"fresh","private":true,"default_branch":"main","html_url":"https://github.com/dimkarp93/fresh","clone_url":"https://github.com/dimkarp93/fresh.git","ssh_url":"git@github.com:dimkarp93/fresh.git","owner":{"login":"dimkarp93"}}`)
+	}))
+	defer srv.Close()
+
+	c := New("tok", WithBaseURL(srv.URL))
+	repo, err := c.RenameRepo(context.Background(), "dimkarp93", "tool", "fresh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotMethod != http.MethodPatch || gotPath != "/repos/dimkarp93/tool" {
+		t.Fatalf("request = %s %s", gotMethod, gotPath)
+	}
+	if gotBody["name"] != "fresh" {
+		t.Fatalf("body = %v", gotBody)
+	}
+	if repo.FullName() != "dimkarp93/fresh" || repo.SSHURL != "git@github.com:dimkarp93/fresh.git" {
+		t.Fatalf("repo = %+v", repo)
+	}
+}
+
+func TestRenameRepoNameTaken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"Validation Failed","errors":[{"message":"name already exists on this account"}]}`, http.StatusUnprocessableEntity)
+	}))
+	defer srv.Close()
+
+	c := New("tok", WithBaseURL(srv.URL))
+	if _, err := c.RenameRepo(context.Background(), "o", "n", "taken"); !errors.Is(err, provider.ErrExists) {
+		t.Fatalf("err = %v, want ErrExists", err)
+	}
+}

@@ -51,6 +51,7 @@ type Provider interface {
 	Compare(ctx context.Context, owner, name, base, head string) (CompareStatus, error)
 	CreateRepo(ctx context.Context, name string, private bool) (Repo, error)
 	DeleteRepo(ctx context.Context, owner, name string) error
+	RenameRepo(ctx context.Context, owner, name, newName string) (Repo, error)
 	RemoteURL(repo Repo, protocol string) string
 }
 

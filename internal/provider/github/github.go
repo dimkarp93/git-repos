@@ -214,6 +214,25 @@ func (c *Client) DeleteRepo(ctx context.Context, owner, name string) error {
 	return c.delete(ctx, u)
 }
 
+func (c *Client) RenameRepo(ctx context.Context, owner, name, newName string) (provider.Repo, error) {
+	u := fmt.Sprintf("%s/repos/%s/%s", c.baseURL, url.PathEscape(owner), url.PathEscape(name))
+	var renamed apiRepo
+	if err := c.patch(ctx, u, map[string]any{"name": newName}, &renamed); err != nil {
+		return provider.Repo{}, err
+	}
+	return provider.Repo{
+		Owner:         renamed.Owner.Login,
+		Name:          renamed.Name,
+		DefaultBranch: renamed.DefaultBranch,
+		Private:       renamed.Private,
+		Archived:      renamed.Archived,
+		Fork:          renamed.Fork,
+		WebURL:        renamed.HTMLURL,
+		CloneURL:      renamed.CloneURL,
+		SSHURL:        renamed.SSHURL,
+	}, nil
+}
+
 func (c *Client) RemoteURL(repo provider.Repo, protocol string) string {
 	if protocol == provider.ProtocolHTTPS {
 		if repo.CloneURL != "" {
@@ -287,6 +306,11 @@ func (c *Client) get(ctx context.Context, u string, v any) (linkHeader string, e
 
 func (c *Client) post(ctx context.Context, u string, body, v any) error {
 	_, err := c.do(ctx, http.MethodPost, u, body, v)
+	return err
+}
+
+func (c *Client) patch(ctx context.Context, u string, body, v any) error {
+	_, err := c.do(ctx, http.MethodPatch, u, body, v)
 	return err
 }
 

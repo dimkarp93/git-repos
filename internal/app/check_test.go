@@ -22,6 +22,7 @@ type fakeProvider struct {
 	remote    map[string]provider.CompareStatus
 	created   []string
 	deleted   []string
+	renamed   []string
 	failOn    map[string]error
 	canonical map[string]provider.Repo
 	lookups   []string
@@ -107,6 +108,22 @@ func (f *fakeProvider) DeleteRepo(_ context.Context, owner, name string) error {
 	}
 	f.deleted = append(f.deleted, owner+"/"+name)
 	return nil
+}
+
+func (f *fakeProvider) RenameRepo(_ context.Context, owner, name, newName string) (provider.Repo, error) {
+	if err := f.failOn["rename:"+owner+"/"+name]; err != nil {
+		return provider.Repo{}, err
+	}
+	for i, repo := range f.repos {
+		if repo.Owner == owner && repo.Name == name {
+			repo.Name = newName
+			repo.WebURL = "https://fake.test/" + owner + "/" + newName
+			f.repos[i] = repo
+			f.renamed = append(f.renamed, owner+"/"+name+"->"+newName)
+			return repo, nil
+		}
+	}
+	return provider.Repo{}, provider.ErrNotFound
 }
 
 func (f *fakeProvider) RemoteURL(repo provider.Repo, protocol string) string {
