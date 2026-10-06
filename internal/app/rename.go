@@ -247,7 +247,7 @@ func protocolOf(originURL string) string {
 func (s *session) executeRename(pair matched, newName string) error {
 	dir := pair.local.Path
 	oldName := pair.remote.Name
-	originURL, err := gitcmd.OriginURL(s.ctx, dir)
+	originURL, err := gitcmd.RemoteURL(s.ctx, dir, pair.gitRemote())
 	if err != nil {
 		return err
 	}
@@ -260,12 +260,12 @@ func (s *session) executeRename(pair matched, newName string) error {
 	if err != nil {
 		return err
 	}
-	if err := gitcmd.SetRemote(s.ctx, dir, "origin", s.prov.RemoteURL(renamed, protocol)); err != nil {
-		return fmt.Errorf("%s renamed to %s, but origin was not updated: %w", pair.remote.FullName(), renamed.FullName(), err)
+	if err := gitcmd.SetRemote(s.ctx, dir, pair.gitRemote(), s.prov.RemoteURL(renamed, protocol)); err != nil {
+		return fmt.Errorf("%s renamed to %s, but %s was not updated: %w", pair.remote.FullName(), renamed.FullName(), pair.gitRemote(), err)
 	}
 	target := filepath.Join(filepath.Dir(dir), newName)
 	if err := os.Rename(dir, target); err != nil {
-		return fmt.Errorf("%s renamed to %s and origin updated, but the directory was not renamed: %w", pair.remote.FullName(), renamed.FullName(), err)
+		return fmt.Errorf("%s renamed to %s and %s updated, but the directory was not renamed: %w", pair.remote.FullName(), renamed.FullName(), pair.gitRemote(), err)
 	}
 	s.printer.Line(render.Grey, "  remote: %s → %s", pair.remote.FullName(), renamed.FullName())
 	s.printer.Line(render.Grey, "  local:  %s → %s", shortPath(dir), shortPath(target))

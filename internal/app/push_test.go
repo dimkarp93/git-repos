@@ -15,7 +15,7 @@ func TestPushDefaultPushesAheadBranch(t *testing.T) {
 	local, _ := ffSetup(t)
 	head := commit(t, local, "b.txt")
 
-	res := pushDefault(context.Background(), local, "main")
+	res := pushDefault(context.Background(), local, "origin", "main")
 	if res.Outcome != ffPushed || res.Ahead != 1 || res.UpstreamSet {
 		t.Fatalf("res = %+v", res)
 	}
@@ -29,7 +29,7 @@ func TestPushDefaultSetsMissingUpstream(t *testing.T) {
 	git(t, local, "branch", "--unset-upstream", "main")
 	head := commit(t, local, "b.txt")
 
-	res := pushDefault(context.Background(), local, "main")
+	res := pushDefault(context.Background(), local, "origin", "main")
 	if res.Outcome != ffPushed || !res.UpstreamSet {
 		t.Fatalf("res = %+v", res)
 	}
@@ -50,7 +50,7 @@ func TestPushDefaultCreatesMissingRemoteBranch(t *testing.T) {
 	git(t, local, "remote", "add", "origin", origin)
 	head := commit(t, local, "a.txt")
 
-	res := pushDefault(context.Background(), local, "main")
+	res := pushDefault(context.Background(), local, "origin", "main")
 	if res.Outcome != ffPushed || !res.UpstreamSet {
 		t.Fatalf("res = %+v", res)
 	}
@@ -61,17 +61,17 @@ func TestPushDefaultCreatesMissingRemoteBranch(t *testing.T) {
 
 func TestPushDefaultLeavesOtherStatesAlone(t *testing.T) {
 	local, other := ffSetup(t)
-	if res := pushDefault(context.Background(), local, "main"); res.Outcome != ffUpToDate {
+	if res := pushDefault(context.Background(), local, "origin", "main"); res.Outcome != ffUpToDate {
 		t.Fatalf("up to date: res = %+v", res)
 	}
 
 	remote := advanceOrigin(t, local, other, "b.txt")
-	if res := pushDefault(context.Background(), local, "main"); res.Outcome != ffBehind || res.Behind != 1 {
+	if res := pushDefault(context.Background(), local, "origin", "main"); res.Outcome != ffBehind || res.Behind != 1 {
 		t.Fatalf("behind: res = %+v", res)
 	}
 
 	commit(t, local, "local.txt")
-	res := pushDefault(context.Background(), local, "main")
+	res := pushDefault(context.Background(), local, "origin", "main")
 	if res.Outcome != ffConflict {
 		t.Fatalf("diverged: res = %+v", res)
 	}

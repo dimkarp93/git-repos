@@ -169,7 +169,7 @@ func (s *session) fillEmpty(pairs []matched, opts options) []syncAction {
 		if !gitcmd.HasCommits(s.ctx, pair.local.Path) {
 			continue
 		}
-		if gitcmd.HasRemoteRefs(s.ctx, pair.local.Path, "origin") {
+		if gitcmd.HasRemoteRefs(s.ctx, pair.local.Path, pair.gitRemote()) {
 			continue
 		}
 		branch := resolveBranch(s.store, s.prov.Name(), pair.remote, opts.refresh)
@@ -193,7 +193,7 @@ func (s *session) fillEmpty(pairs []matched, opts options) []syncAction {
 			actions = append(actions, action)
 			continue
 		}
-		if err := gitcmd.Push(s.ctx, pair.local.Path, "origin", local); err != nil {
+		if err := gitcmd.Push(s.ctx, pair.local.Path, pair.gitRemote(), local); err != nil {
 			action.Err = err
 			actions = append(actions, action)
 			continue

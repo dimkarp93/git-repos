@@ -6,7 +6,7 @@
 The script itself holds no lists: it asks the binary for candidates (`git-repos __complete ...`),
 so it does not have to be reinstalled after `git-repos` is updated.
 
-It assumes `git-repos` is on `PATH` (`just install` puts it into `~/.local/bin`): the script calls it
+It assumes `git-repos` is on `PATH` (`just install` puts it into `/usr/local/bin`): the script calls it
 by that name.
 
 It completes command names, the flags of a command, values for `--provider`, `--protocol` and

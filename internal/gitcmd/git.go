@@ -43,7 +43,11 @@ func firstLine(s string) string {
 }
 
 func OriginURL(ctx context.Context, dir string) (string, error) {
-	out, code, err := run(ctx, dir, "config", "--get", "remote.origin.url")
+	return RemoteURL(ctx, dir, "origin")
+}
+
+func RemoteURL(ctx context.Context, dir, name string) (string, error) {
+	out, code, err := run(ctx, dir, "config", "--get", "remote."+name+".url")
 	if code == 1 {
 		return "", nil
 	}
@@ -241,4 +245,104 @@ func DefaultBranch(ctx context.Context, dir string) string {
 func HasRemoteRefs(ctx context.Context, dir, remote string) bool {
 	out, _, err := run(ctx, dir, "for-each-ref", "--count=1", "refs/remotes/"+remote)
 	return err == nil && out != ""
+}
+
+type Remote struct {
+	Name string
+	URL  string
+}
+
+func Remotes(ctx context.Context, dir string) ([]Remote, error) {
+	out, code, err := run(ctx, dir, "config", "--get-regexp", `^remote\..*\.url$`)
+	if code == 1 {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var remotes []Remote
+	for _, line := range strings.Split(out, "\n") {
+		key, url, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok {
+			continue
+		}
+		name := strings.TrimSuffix(strings.TrimPrefix(key, "remote."), ".url")
+		remote := Remote{Name: name, URL: strings.TrimSpace(url)}
+		if name == "origin" {
+			remotes = append([]Remote{remote}, remotes...)
+			continue
+		}
+		remotes = append(remotes, remote)
+	}
+	return remotes, nil
+}
+
+func RemoteExists(ctx context.Context, dir, name string) bool {
+	_, code, _ := run(ctx, dir, "remote", "get-url", name)
+	return code == 0
+}
+
+func AddRemote(ctx context.Context, dir, name, url string) error {
+	_, _, err := run(ctx, dir, "remote", "add", name, url)
+	return err
+}
+
+func RootCommits(ctx context.Context, dir string) ([]string, error) {
+	out, _, err := run(ctx, dir, "rev-list", "--max-parents=0", "--all")
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	return strings.Split(out, "\n"), nil
+}
+
+type Blob struct {
+	Path string
+	SHA  string
+}
+
+func TreeBlobs(ctx context.Context, dir, rev string) ([]Blob, error) {
+	out, _, err := run(ctx, dir, "ls-tree", "-r", "-z", "--full-tree", rev)
+	if err != nil {
+		return nil, err
+	}
+	var blobs []Blob
+	for _, entry := range strings.Split(out, "\x00") {
+		meta, path, ok := strings.Cut(entry, "\t")
+		if !ok {
+			continue
+		}
+		fields := strings.Fields(meta)
+		if len(fields) != 3 || fields[1] != "blob" {
+			continue
+		}
+		blobs = append(blobs, Blob{Path: path, SHA: fields[2]})
+	}
+	return blobs, nil
+}
+
+func AllCommits(ctx context.Context, dir string) (map[string]bool, error) {
+	out, _, err := run(ctx, dir, "rev-list", "--all")
+	if err != nil {
+		return nil, err
+	}
+	commits := map[string]bool{}
+	for _, sha := range strings.Split(out, "\n") {
+		if sha != "" {
+			commits[sha] = true
+		}
+	}
+	return commits, nil
+}
+
+func SetRemoteHead(ctx context.Context, dir, remote, branch string) error {
+	_, _, err := run(ctx, dir, "remote", "set-head", remote, branch)
+	return err
+}
+
+func RemoveRemote(ctx context.Context, dir, name string) error {
+	_, _, err := run(ctx, dir, "remote", "remove", name)
+	return err
 }

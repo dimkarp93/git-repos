@@ -29,25 +29,26 @@ const (
 const cacheTTL = 7 * 24 * time.Hour
 
 type options struct {
-	roots      repeatable
-	providerID string
-	protocol   string
-	fetch      bool
-	all        bool
-	refresh    bool
-	dryRun     bool
-	assumeYes  bool
-	into       string
-	depth      int
-	jobs       int
-	noCache    bool
-	clearCache bool
-	noColor    bool
-	noProgress bool
-	forceColor bool
-	asJSON     bool
-	filters    filters
-	timeout    time.Duration
+	roots         repeatable
+	providerID    string
+	protocol      string
+	fetch         bool
+	all           bool
+	refresh       bool
+	dryRun        bool
+	assumeYes     bool
+	into          string
+	depth         int
+	minSimilarity float64
+	jobs          int
+	noCache       bool
+	clearCache    bool
+	noColor       bool
+	noProgress    bool
+	forceColor    bool
+	asJSON        bool
+	filters       filters
+	timeout       time.Duration
 }
 
 type repeatable []string
@@ -76,6 +77,7 @@ func commands() []command {
 		{name: "ff", summary: "fast-forward the default branch to the fetched origin branch", run: runFF, flags: ffFlags},
 		{name: "push", summary: "push the default branch when it is ahead, setting the upstream if missing", run: runPush, flags: pushFlags},
 		{name: "rename", summary: "rename a repository locally and on the account", run: runRename, flags: renameFlags},
+		{name: "fix", summary: "link repositories that share history and align their names", run: runFix, flags: fixFlags},
 		{name: "sync", summary: "create missing repositories on both sides", run: runSync, flags: syncFlags},
 		{name: "clean-local", summary: "delete local repositories without a remote", run: runCleanLocal, flags: cleanLocalFlags},
 		{name: "clean-remote", summary: "delete remote repositories without a local copy", run: runCleanRemote, flags: cleanRemoteFlags},

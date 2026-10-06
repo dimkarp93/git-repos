@@ -95,7 +95,7 @@ func fetchAll(ctx context.Context, s *session, pairs []matched, opts options, pr
 			if branch == "" {
 				res.Err = errDefaultBranchUnknown
 			} else {
-				res.Err = gitcmd.Fetch(ctx, pair.local.Path, "origin", branch)
+				res.Err = gitcmd.Fetch(ctx, pair.local.Path, pair.gitRemote(), branch)
 			}
 			results[i] = res
 		}()

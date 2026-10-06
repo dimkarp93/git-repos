@@ -233,6 +233,78 @@ func (c *Client) RenameRepo(ctx context.Context, owner, name, newName string) (p
 	}, nil
 }
 
+const historyPageSize = 100
+
+type apiCommit struct {
+	SHA    string `json:"sha"`
+	Commit struct {
+		Message string `json:"message"`
+		Author  struct {
+			Date time.Time `json:"date"`
+		} `json:"author"`
+	} `json:"commit"`
+}
+
+func (a apiCommit) toCommit() provider.Commit {
+	subject, _, _ := strings.Cut(a.Commit.Message, "\n")
+	return provider.Commit{SHA: a.SHA, Subject: strings.TrimSpace(subject), Date: a.Commit.Author.Date}
+}
+
+func (c *Client) History(ctx context.Context, owner, name, branch string) (provider.History, error) {
+	c.note("history of %s/%s", owner, name)
+	base := fmt.Sprintf("%s/repos/%s/%s/commits?sha=%s&per_page=%d", c.baseURL, url.PathEscape(owner), url.PathEscape(name), url.QueryEscape(branch), historyPageSize)
+	var first []apiCommit
+	link, err := c.get(ctx, base, &first)
+	if err != nil {
+		return provider.History{}, err
+	}
+	if len(first) == 0 {
+		return provider.History{}, provider.ErrEmpty
+	}
+	history := provider.History{Recent: make([]provider.Commit, len(first))}
+	for i, item := range first {
+		history.Recent[i] = item.toCommit()
+	}
+	last := lastPage(link)
+	if last <= 1 {
+		history.Root = history.Recent[len(history.Recent)-1]
+		history.Total = len(first)
+		return history, nil
+	}
+	var tail []apiCommit
+	if _, err := c.get(ctx, fmt.Sprintf("%s&page=%d", base, last), &tail); err != nil {
+		return provider.History{}, err
+	}
+	if len(tail) == 0 {
+		return provider.History{}, fmt.Errorf("github: empty last page of %s/%s history", owner, name)
+	}
+	history.Root = tail[len(tail)-1].toCommit()
+	history.Total = (last-1)*historyPageSize + len(tail)
+	return history, nil
+}
+
+func (c *Client) Tree(ctx context.Context, owner, name, branch string) ([]provider.TreeEntry, error) {
+	c.note("files of %s/%s", owner, name)
+	var resp struct {
+		Tree []struct {
+			Path string `json:"path"`
+			Type string `json:"type"`
+			SHA  string `json:"sha"`
+		} `json:"tree"`
+	}
+	u := fmt.Sprintf("%s/repos/%s/%s/git/trees/%s?recursive=1", c.baseURL, url.PathEscape(owner), url.PathEscape(name), url.PathEscape(branch))
+	if _, err := c.get(ctx, u, &resp); err != nil {
+		return nil, err
+	}
+	out := make([]provider.TreeEntry, 0, len(resp.Tree))
+	for _, item := range resp.Tree {
+		if item.Type == "blob" {
+			out = append(out, provider.TreeEntry{Path: item.Path, SHA: item.SHA})
+		}
+	}
+	return out, nil
+}
+
 func (c *Client) RemoteURL(repo provider.Repo, protocol string) string {
 	if protocol == provider.ProtocolHTTPS {
 		if repo.CloneURL != "" {
@@ -349,6 +421,8 @@ func (c *Client) do(ctx context.Context, method, u string, body, v any) (linkHea
 	switch {
 	case resp.StatusCode == http.StatusNotFound:
 		return "", provider.ErrNotFound
+	case resp.StatusCode == http.StatusConflict:
+		return "", fmt.Errorf("github: %w: %s", provider.ErrEmpty, message(resp.Body))
 	case resp.StatusCode == http.StatusUnauthorized:
 		return "", fmt.Errorf("github: %w: token rejected", provider.ErrNoToken)
 	case resp.StatusCode == http.StatusUnprocessableEntity:

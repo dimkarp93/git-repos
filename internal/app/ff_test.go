@@ -41,7 +41,7 @@ func TestFastForwardCheckedOutBranch(t *testing.T) {
 	local, other := ffSetup(t)
 	head := advanceOrigin(t, local, other, "b.txt")
 
-	res := fastForward(context.Background(), local, "main")
+	res := fastForward(context.Background(), local, "origin", "main")
 	if res.Outcome != ffForwarded || res.Behind != 1 || !res.CheckedOut {
 		t.Fatalf("res = %+v", res)
 	}
@@ -58,7 +58,7 @@ func TestFastForwardBranchNotCheckedOut(t *testing.T) {
 	git(t, local, "checkout", "--quiet", "-b", "feature")
 	head := advanceOrigin(t, local, other, "b.txt")
 
-	res := fastForward(context.Background(), local, "main")
+	res := fastForward(context.Background(), local, "origin", "main")
 	if res.Outcome != ffForwarded || res.CheckedOut {
 		t.Fatalf("res = %+v", res)
 	}
@@ -72,7 +72,7 @@ func TestFastForwardBranchNotCheckedOut(t *testing.T) {
 
 func TestFastForwardUpToDate(t *testing.T) {
 	local, _ := ffSetup(t)
-	if res := fastForward(context.Background(), local, "main"); res.Outcome != ffUpToDate {
+	if res := fastForward(context.Background(), local, "origin", "main"); res.Outcome != ffUpToDate {
 		t.Fatalf("res = %+v", res)
 	}
 }
@@ -81,7 +81,7 @@ func TestFastForwardAhead(t *testing.T) {
 	local, _ := ffSetup(t)
 	head := commit(t, local, "b.txt")
 
-	res := fastForward(context.Background(), local, "main")
+	res := fastForward(context.Background(), local, "origin", "main")
 	if res.Outcome != ffAhead || res.Ahead != 1 {
 		t.Fatalf("res = %+v", res)
 	}
@@ -95,7 +95,7 @@ func TestFastForwardDivergedIsConflict(t *testing.T) {
 	head := commit(t, local, "local.txt")
 	remote := advanceOrigin(t, local, other, "remote.txt")
 
-	res := fastForward(context.Background(), local, "main")
+	res := fastForward(context.Background(), local, "origin", "main")
 	if res.Outcome != ffConflict || res.Ahead != 1 || res.Behind != 1 {
 		t.Fatalf("res = %+v", res)
 	}
@@ -115,7 +115,7 @@ func TestFastForwardRefusesToOverwriteLocalFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res := fastForward(context.Background(), local, "main")
+	res := fastForward(context.Background(), local, "origin", "main")
 	if res.Outcome != ffError {
 		t.Fatalf("res = %+v", res)
 	}
@@ -131,7 +131,7 @@ func TestFastForwardNeedsFetchedOrigin(t *testing.T) {
 	local, _ := ffSetup(t)
 	git(t, local, "update-ref", "-d", "refs/remotes/origin/main")
 
-	res := fastForward(context.Background(), local, "main")
+	res := fastForward(context.Background(), local, "origin", "main")
 	if res.Outcome != ffError || !strings.Contains(res.Detail, "run update") {
 		t.Fatalf("res = %+v", res)
 	}
@@ -139,7 +139,7 @@ func TestFastForwardNeedsFetchedOrigin(t *testing.T) {
 
 func TestFastForwardNoLocalBranch(t *testing.T) {
 	local, _ := ffSetup(t)
-	if res := fastForward(context.Background(), local, "develop"); res.Outcome != ffSkipped {
+	if res := fastForward(context.Background(), local, "origin", "develop"); res.Outcome != ffSkipped {
 		t.Fatalf("res = %+v", res)
 	}
 }

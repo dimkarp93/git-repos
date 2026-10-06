@@ -14,6 +14,7 @@ shows what is out of sync.
 | `update` | runs `git fetch` of the default branch in every matched repository, with a spinner showing how many repositories are in flight; local branches are not moved |
 | `ff` | fast-forwards the default branch to the fetched `origin/<branch>`, prints commands to resolve a diverged history |
 | `push` | pushes the default branch when it is ahead of origin, setting the upstream to the same-named branch if missing |
+| `fix` | links "local only" and "remote only" repositories that share history or files by adding a remote, and offers to align different local and remote names |
 | `sync` | creates what is missing on either side: a private GitHub repository for local ones and `git clone` for remote ones |
 | `clean-local` | deletes local repositories that have no remote |
 | `clean-remote` | deletes remote repositories that have no local copy |
@@ -36,7 +37,10 @@ prints the same list plus the common flags.
 2. Fetches the list of account repositories from the provider. The name from `origin` is matched
    case-insensitively, and if it is not in the list, a direct `GET /repos/{owner}/{name}` request is
    made, which follows the rename redirect. That way a repository renamed on GitHub, or written in a
-   different case in `origin`, does not end up both in "local only" and "remote only".
+   different case in `origin`, does not end up both in "local only" and "remote only". When `origin` is missing,
+   points to another host or to a repository that does not exist, the other remotes are checked: the first one
+   pointing to an account repository links the pair (this is how `fix` adds, say, a `github` remote next to a
+   GitLab `origin`). `update`, `ff`, `push` and `sync` then use that remote.
 3. Prints two tables:
    - **composition** — what exists only locally and only on the remote (matches are not shown);
    - **default branches** — who is behind whom.
@@ -198,6 +202,60 @@ For every repository a question with no default answer is asked:
 to `yes-to-all` from the first repository, `--dry-run` prints the list of candidates. `clean-local` warns
 about uncommitted changes; `clean-remote` requires the `delete_repo` scope on the token.
 
+### fix
+
+```
+git-repos fix [--dry-run] [--yes] [--protocol ssh|https] [--min-similarity 0.5]
+```
+
+The candidates are exactly what `diff` shows as "local only" and "remote only"; matches are searched only
+between these two lists:
+
+1. **History.** The API returns the latest 100 commits of the default branch and the very first commit (from the
+   last page of `/commits`), no objects are downloaded. A pair matches when the remote first commit is among the
+   local ones or at least one of the latest commits is in the local history (`git rev-list --all`). An identical
+   SHA means identical files and identical history up to that commit.
+2. **Files.** If no remote shares history with a local repository, the file hashes of the local `HEAD` and of the
+   default branch (`/git/trees?recursive=1`) are compared. A pair matches when the share of identical files
+   (Jaccard) is at least `--min-similarity`. This catches repositories whose history was rewritten or started anew.
+
+For every local repository a summary of the candidates is printed (ranked by a shared first commit, then the number
+of shared commits, file similarity and the name):
+
+```
+~/tools/foo  (no origin)
+  1) dimkarp93/foo-cli  (name differs)
+     ✓ same first commit     a1b2c3d  2024-03-01  init
+     ✓ 42 of the latest 100 remote commits (of 512) are in the local history
+         9f8e7d6  2025-09-12  bump minor
+         …
+     → local is 3 commits ahead of the remote
+     why: an identical commit SHA means identical files and identical history up to that commit
+Link ~/tools/foo with:
+  [1 | skip | skip-to-all]:
+```
+
+A chosen remote repository is not offered again. If the local repository has a remote pointing to an account
+repository that does not exist, the command offers to delete it (`[remove | keep]`). Without `origin` (or once it
+was removed) the new remote is `origin`; otherwise the command asks for its name, the provider name (`github`) by
+default. If that remote already exists it asks `[overwrite | rename]`: `overwrite` replaces its URL, `rename` goes
+back to the name prompt. Then the default branch is fetched and `git remote set-head` is run.
+
+After linking, `fix` compares the names: the directory name and the name of the account repository. It does this
+both for the pairs it has just linked and for the pairs already linked through a remote. When the names differ it
+asks `[local | remote | keep]`:
+- `local` renames the directory to the remote name (`~/tools/qemu-cli → ~/tools/qemu`);
+- `remote` renames the account repository to the directory name and updates the remote URL;
+- `keep` leaves both names.
+
+If the chosen name is taken (the directory exists or the account already has such a repository), the command
+says so and asks again.
+
+`--yes` asks nothing: it links a pair only when the candidate is the only one or the only one with a shared first
+commit and skips the rest as `ambiguous`; the remote name is the default, dead remotes are kept and a taken name is
+not overwritten (the pair is reported as an error); different names are left alone. `--dry-run` prints the summaries and the
+plan and changes nothing.
+
 ### rename
 
 ```
@@ -222,7 +280,7 @@ a validation error is shown in red and disappears on any key, `Esc` returns to t
 
 ```sh
 just build      # ./git-repos in the repository root
-just install    # ~/.local/bin/git-repos
+just install    # /usr/local/bin/git-repos (sudo when the directory is not writable)
 ```
 
 ### Shell completion
@@ -277,12 +335,13 @@ Common to all commands: `-C <dir>` (repeatable), `--provider github`, `--depth N
 | `--refresh` | diff, update, ff, push | ignore the default branch cache (the file is still refreshed with new data) |
 | `--no-cache` | all | never read from or write to the cache; the file on disk is left alone |
 | `--clear-cache` | all | delete the cache file before running and fill it again |
-| `--no-progress` | diff, status, update, ff, push, sync, do | do not show the spinner |
-| `--dry-run` | sync, clean-*, do | show the plan, change nothing |
+| `--no-progress` | diff, status, update, ff, push, sync, fix, do | do not show the spinner |
+| `--dry-run` | sync, fix, clean-*, do | show the plan, change nothing |
 | filters | diff, status, do | see the "Filters" section |
 | `--into <dir>` | sync | **required**: directory to clone into |
-| `--protocol ssh\|https` | sync | protocol for new remotes and clones |
-| `--yes` | clean-* | do not ask, assume the answer is `yes-to-all` |
+| `--protocol ssh\|https` | sync, fix | protocol for new remotes and clones |
+| `--min-similarity <0..1>` | fix | minimal share of identical files for a pair without shared commits (0.5) |
+| `--yes` | clean-*, fix | do not ask, assume the answer is `yes-to-all` (for `fix` only unambiguous pairs) |
 | `--version`, `--origin`, `--buildinfo` | — | build information |
 
 Exit codes for commands other than `diff`: `0` — success, `2` — there were errors.

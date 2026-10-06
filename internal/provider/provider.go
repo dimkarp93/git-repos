@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 type Repo struct {
@@ -31,6 +32,23 @@ const (
 	CompareUnknown   CompareStatus = "unknown"
 )
 
+type Commit struct {
+	SHA     string
+	Subject string
+	Date    time.Time
+}
+
+type History struct {
+	Recent []Commit
+	Root   Commit
+	Total  int
+}
+
+type TreeEntry struct {
+	Path string
+	SHA  string
+}
+
 type ProgressSink interface {
 	Note(item string)
 	Total(total int)
@@ -52,6 +70,8 @@ type Provider interface {
 	CreateRepo(ctx context.Context, name string, private bool) (Repo, error)
 	DeleteRepo(ctx context.Context, owner, name string) error
 	RenameRepo(ctx context.Context, owner, name, newName string) (Repo, error)
+	History(ctx context.Context, owner, name, branch string) (History, error)
+	Tree(ctx context.Context, owner, name, branch string) ([]TreeEntry, error)
 	RemoteURL(repo Repo, protocol string) string
 }
 
@@ -67,4 +87,5 @@ var (
 	ErrNoProvider = errors.New("unknown provider")
 	ErrForbidden  = errors.New("forbidden")
 	ErrExists     = errors.New("already exists")
+	ErrEmpty      = errors.New("repository is empty")
 )

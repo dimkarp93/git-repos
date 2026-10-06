@@ -33,8 +33,8 @@ func printPush(p *render.Printer, results []ffResult) int {
 	return finishBranchResults(p, results, counts)
 }
 
-func pushDefault(ctx context.Context, dir, branch string) ffResult {
-	res := compareDefault(ctx, dir, branch)
+func pushDefault(ctx context.Context, dir, remoteName, branch string) ffResult {
+	res := compareDefault(ctx, dir, remoteName, branch)
 	if res.Outcome != ffAhead && res.Outcome != ffNotFetched {
 		return res
 	}
@@ -43,7 +43,7 @@ func pushDefault(ctx context.Context, dir, branch string) ffResult {
 		return res.fail(err)
 	}
 	res.UpstreamSet = upstream == ""
-	if err := gitcmd.PushBranch(ctx, dir, "origin", branch, res.UpstreamSet); err != nil {
+	if err := gitcmd.PushBranch(ctx, dir, remoteName, branch, res.UpstreamSet); err != nil {
 		return res.fail(err)
 	}
 	res.Outcome = ffPushed

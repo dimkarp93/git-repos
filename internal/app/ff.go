@@ -30,6 +30,7 @@ type ffResult struct {
 	FullName    string
 	Path        string
 	dir         string
+	Remote      string
 	Branch      string
 	Outcome     ffOutcome
 	LocalSHA    string
@@ -41,7 +42,14 @@ type ffResult struct {
 	Detail      string
 }
 
-type branchAction func(ctx context.Context, dir, branch string) ffResult
+func (r ffResult) remote() string {
+	if r.Remote == "" {
+		return "origin"
+	}
+	return r.Remote
+}
+
+type branchAction func(ctx context.Context, dir, remote, branch string) ffResult
 
 func ffFlags(opts *options) *flag.FlagSet {
 	fs := newFlagSet("ff", opts)
@@ -140,7 +148,7 @@ func ffCell(res ffResult) render.Cell {
 	case ffBehind:
 		return render.Cell{Text: fmt.Sprintf("behind +%d → ff", res.Behind), Color: render.Orange}
 	case ffConflict:
-		return render.Cell{Text: fmt.Sprintf("conflict: +%d local, +%d origin", res.Ahead, res.Behind), Color: render.Red}
+		return render.Cell{Text: fmt.Sprintf("conflict: +%d local, +%d %s", res.Ahead, res.Behind, res.remote()), Color: render.Red}
 	case ffSkipped:
 		return render.Cell{Text: render.Ellipsis("skipped: "+res.Detail, maxDetailWidth), Color: render.Grey}
 	default:
@@ -151,23 +159,24 @@ func ffCell(res ffResult) render.Cell {
 func printConflict(p *render.Printer, res ffResult) {
 	g := "git -C " + shellQuote(res.dir) + " "
 	b := res.Branch
-	origin := "origin/" + b
+	r := res.remote()
+	origin := r + "/" + b
 	code := func(cmd string) { p.Line(render.Blue, "       %s", cmd) }
 
 	p.Line("", "")
 	p.Line(render.Red, "Version conflict: %s (%s) — local %s and %s have diverged", res.FullName, b, b, origin)
-	p.Line("", "  local  %s  +%d commits not on origin", shortSHA(res.LocalSHA), res.Ahead)
-	p.Line("", "  origin %s  +%d commits not in local", shortSHA(res.RemoteSHA), res.Behind)
+	p.Line("", "  local  %s  +%d commits not on %s", shortSHA(res.LocalSHA), res.Ahead, r)
+	p.Line("", "  %-6s %s  +%d commits not in local", r, shortSHA(res.RemoteSHA), res.Behind)
 	p.Line("", "")
 	p.Line(render.Bold, "  1. Merge the histories, resolve conflicts and commit, then push:")
 	if !res.CheckedOut {
 		code(g + "checkout " + b)
 	}
 	code(g + "merge " + origin)
-	code(g + "push origin " + b)
-	p.Line(render.Bold, "  2. Keep local, overwrite the history on origin:")
-	code(g + "push --force-with-lease=" + b + ":" + res.RemoteSHA + " origin " + b)
-	p.Line(render.Bold, "  3. Keep origin, overwrite the local history (local commits stay in the backup branch):")
+	code(g + "push " + r + " " + b)
+	p.Line(render.Bold, "  2. Keep local, overwrite the history on %s:", r)
+	code(g + "push --force-with-lease=" + b + ":" + res.RemoteSHA + " " + r + " " + b)
+	p.Line(render.Bold, "  3. Keep %s, overwrite the local history (local commits stay in the backup branch):", r)
 	code(g + "branch backup/" + b + "-" + shortSHA(res.LocalSHA) + " " + b)
 	if res.CheckedOut {
 		code(g + "reset --hard " + origin)
@@ -206,7 +215,7 @@ func forEachDefault(ctx context.Context, s *session, pairs []matched, opts optio
 			if pair.originName != "" {
 				name += " (origin: " + pair.originName + ")"
 			}
-			res := action(ctx, pair.local.Path, branch)
+			res := action(ctx, pair.local.Path, pair.gitRemote(), branch)
 			res.FullName = name
 			res.Path = shortPath(pair.local.Path)
 			results[i] = res
@@ -217,8 +226,8 @@ func forEachDefault(ctx context.Context, s *session, pairs []matched, opts optio
 	return results
 }
 
-func compareDefault(ctx context.Context, dir, branch string) ffResult {
-	res := ffResult{dir: dir, Branch: branch}
+func compareDefault(ctx context.Context, dir, remoteName, branch string) ffResult {
+	res := ffResult{dir: dir, Remote: remoteName, Branch: branch}
 	if branch == "" {
 		return res.fail(errDefaultBranchUnknown)
 	}
@@ -234,7 +243,7 @@ func compareDefault(ctx context.Context, dir, branch string) ffResult {
 	res.LocalSHA = local
 	current, _ := gitcmd.CurrentBranch(ctx, dir)
 	res.CheckedOut = current == branch
-	remote, err := gitcmd.RevParse(ctx, dir, "refs/remotes/origin/"+branch)
+	remote, err := gitcmd.RevParse(ctx, dir, "refs/remotes/"+remoteName+"/"+branch)
 	if errors.Is(err, gitcmd.ErrNoRef) {
 		res.Outcome = ffNotFetched
 		return res
@@ -264,12 +273,12 @@ func compareDefault(ctx context.Context, dir, branch string) ffResult {
 	return res
 }
 
-func fastForward(ctx context.Context, dir, branch string) ffResult {
-	res := compareDefault(ctx, dir, branch)
+func fastForward(ctx context.Context, dir, remoteName, branch string) ffResult {
+	res := compareDefault(ctx, dir, remoteName, branch)
 	switch res.Outcome {
 	case ffNotFetched:
 		res.Outcome = ffError
-		res.Detail = "origin/" + branch + " not fetched, run update"
+		res.Detail = remoteName + "/" + branch + " not fetched, run update"
 		return res
 	case ffBehind:
 	default:
@@ -277,9 +286,9 @@ func fastForward(ctx context.Context, dir, branch string) ffResult {
 	}
 	var err error
 	if res.CheckedOut {
-		err = gitcmd.MergeFFOnly(ctx, dir, "refs/remotes/origin/"+branch)
+		err = gitcmd.MergeFFOnly(ctx, dir, "refs/remotes/"+remoteName+"/"+branch)
 	} else {
-		err = gitcmd.FastForwardBranch(ctx, dir, "origin", branch)
+		err = gitcmd.FastForwardBranch(ctx, dir, remoteName, branch)
 	}
 	if err != nil {
 		return res.fail(err)

@@ -52,10 +52,20 @@ clean:
     rm -rf dist
 
 [group('install')]
-[doc('install into ~/.local/bin')]
+[doc('install into /usr/local/bin (sudo when it is not writable)')]
 install: build
-    install -d "$HOME/.local/bin"
-    install -m 0755 {{bin}} "$HOME/.local/bin/{{bin}}"
+    #!/usr/bin/env sh
+    set -eu
+    dir=/usr/local/bin
+    sudo=""
+    [ -w "$dir" ] || sudo=sudo
+    $sudo install -d "$dir"
+    $sudo install -m 0755 {{bin}} "$dir/{{bin}}"
+    echo "Installed: $dir/{{bin}}"
+    if [ -e "$HOME/.local/bin/{{bin}}" ]; then
+        rm -f "$HOME/.local/bin/{{bin}}"
+        echo "Removed the old copy $HOME/.local/bin/{{bin}}: it shadowed $dir/{{bin}} in PATH"
+    fi
 
 [group('install')]
 [doc('install completions and wire them into ~/.bashrc / ~/.zshrc')]
@@ -68,9 +78,15 @@ completions-uninstall: build
     ./{{bin}} uninstall-completions all
 
 [group('install')]
-[doc('remove from ~/.local/bin')]
+[doc('remove from /usr/local/bin')]
 uninstall:
-    -"$HOME/.local/bin/{{bin}}" uninstall-completions all
+    #!/usr/bin/env sh
+    set -eu
+    dir=/usr/local/bin
+    sudo=""
+    [ -w "$dir" ] || sudo=sudo
+    "$dir/{{bin}}" uninstall-completions all || true
+    $sudo rm -f "$dir/{{bin}}"
     rm -f "$HOME/.local/bin/{{bin}}"
 
 [group('release')]

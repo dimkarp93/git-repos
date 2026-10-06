@@ -99,6 +99,14 @@ type matched struct {
 	local      scan.Repo
 	remote     provider.Repo
 	originName string
+	remoteName string
+}
+
+func (m matched) gitRemote() string {
+	if m.remoteName == "" {
+		return "origin"
+	}
+	return m.remoteName
 }
 
 type OriginMismatch struct {
@@ -146,54 +154,53 @@ func collect(ctx context.Context, prov provider.Provider, store *cache.Cache, cf
 		byName[strings.ToLower(repo.FullName())] = repo
 	}
 
+	resolve := func(url string) (provider.Repo, string, bool) {
+		owner, name, ok := prov.ParseRemote(url)
+		if !ok {
+			return provider.Repo{}, "", false
+		}
+		full := owner + "/" + name
+		if remote, found := byName[strings.ToLower(full)]; found {
+			return remote, full, true
+		}
+		resolved, err := prov.Repo(ctx, owner, name)
+		if err != nil || resolved.Name == "" {
+			return provider.Repo{}, full, false
+		}
+		return resolved, full, true
+	}
+
 	seen := map[string]bool{}
 	pr.setPhase("matching against " + prov.Name())
 	pr.setTotal(len(locals))
 	for i, local := range locals {
 		pr.step(shortPath(local.Path), i)
-		url, err := gitcmd.OriginURL(ctx, local.Path)
+		remotesOf, err := gitcmd.Remotes(ctx, local.Path)
 		if err != nil {
 			inv.localOnly = append(inv.localOnly, LocalOnly{Path: local.Path, Kind: KindUnreadable, Reason: "origin unreadable"})
 			continue
 		}
-		if url == "" {
-			inv.localOnly = append(inv.localOnly, LocalOnly{
-				Path:   local.Path,
-				Kind:   KindNoOrigin,
-				Reason: "no origin",
-				Owner:  account,
-				Name:   filepath.Base(local.Path),
-			})
-			continue
-		}
-		owner, name, ok := prov.ParseRemote(url)
-		if !ok {
-			inv.localOnly = append(inv.localOnly, LocalOnly{Path: local.Path, Kind: KindForeignRemote, Reason: "foreign remote"})
-			continue
-		}
-		full := owner + "/" + name
-		remote, found := byName[strings.ToLower(full)]
-		if !found {
-			resolved, err := prov.Repo(ctx, owner, name)
-			if err != nil || resolved.Name == "" {
-				inv.localOnly = append(inv.localOnly, LocalOnly{
-					Path:   local.Path,
-					Kind:   KindMissingRemote,
-					Reason: full + " not on " + prov.Name(),
-					Owner:  owner,
-					Name:   name,
-				})
+		pair, found := matched{}, false
+		for _, r := range remotesOf {
+			remote, full, ok := resolve(r.URL)
+			if !ok {
 				continue
 			}
-			remote = resolved
+			pair, found = matched{local: local, remote: remote, remoteName: r.Name}, true
+			if remote.FullName() != full {
+				pair.originName = full
+			}
+			break
 		}
-		pair := matched{local: local, remote: remote}
-		if remote.FullName() != full {
-			pair.originName = full
-			inv.mismatched = append(inv.mismatched, OriginMismatch{Path: local.Path, Origin: full, Canonical: remote.FullName()})
+		if found {
+			if pair.originName != "" {
+				inv.mismatched = append(inv.mismatched, OriginMismatch{Path: local.Path, Origin: pair.originName, Canonical: pair.remote.FullName()})
+			}
+			seen[strings.ToLower(pair.remote.FullName())] = true
+			inv.pairs = append(inv.pairs, pair)
+			continue
 		}
-		seen[strings.ToLower(remote.FullName())] = true
-		inv.pairs = append(inv.pairs, pair)
+		inv.localOnly = append(inv.localOnly, unmatchedLocal(prov, local.Path, account, originURLOf(remotesOf)))
 	}
 
 	pr.complete()
@@ -207,6 +214,27 @@ func collect(ctx context.Context, prov provider.Provider, store *cache.Cache, cf
 	sort.Slice(inv.localOnly, func(i, j int) bool { return inv.localOnly[i].Path < inv.localOnly[j].Path })
 	sort.Slice(inv.remoteOnly, func(i, j int) bool { return inv.remoteOnly[i].FullName < inv.remoteOnly[j].FullName })
 	return inv.pairs, inv, nil
+}
+
+func originURLOf(remotes []gitcmd.Remote) string {
+	for _, r := range remotes {
+		if r.Name == "origin" {
+			return r.URL
+		}
+	}
+	return ""
+}
+
+func unmatchedLocal(prov provider.Provider, path, account, originURL string) LocalOnly {
+	if originURL == "" {
+		return LocalOnly{Path: path, Kind: KindNoOrigin, Reason: "no origin", Owner: account, Name: filepath.Base(path)}
+	}
+	owner, name, ok := prov.ParseRemote(originURL)
+	if !ok {
+		return LocalOnly{Path: path, Kind: KindForeignRemote, Reason: "foreign remote"}
+	}
+	full := owner + "/" + name
+	return LocalOnly{Path: path, Kind: KindMissingRemote, Reason: full + " not on " + prov.Name(), Owner: owner, Name: name}
 }
 
 func build(ctx context.Context, prov provider.Provider, store *cache.Cache, roots []string, cfg config.Config, opts options, pr *progress) (Report, error) {
@@ -273,7 +301,7 @@ func inspect(ctx context.Context, prov provider.Provider, store *cache.Cache, pa
 	}
 
 	if opts.fetch {
-		if err := gitcmd.Fetch(ctx, pair.local.Path, "origin", branch); err != nil {
+		if err := gitcmd.Fetch(ctx, pair.local.Path, pair.gitRemote(), branch); err != nil {
 			res.Detail = "fetch failed"
 		}
 	}

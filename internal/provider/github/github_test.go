@@ -328,3 +328,86 @@ func TestRenameRepoNameTaken(t *testing.T) {
 		t.Fatalf("err = %v, want ErrExists", err)
 	}
 }
+
+func TestHistoryFollowsLastPage(t *testing.T) {
+	var srv *httptest.Server
+	var pages []string
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/o/n/commits" || r.URL.Query().Get("sha") != "main" {
+			t.Errorf("request = %s", r.URL)
+		}
+		page := r.URL.Query().Get("page")
+		pages = append(pages, page)
+		if page == "" {
+			w.Header().Set("Link", fmt.Sprintf(`<%s/repos/o/n/commits?sha=main&page=2>; rel="next", <%s/repos/o/n/commits?sha=main&page=3>; rel="last"`, srv.URL, srv.URL))
+			fmt.Fprint(w, `[{"sha":"c3","commit":{"message":"third\n\nbody","author":{"date":"2025-03-01T10:00:00Z"}}},{"sha":"c2","commit":{"message":"second","author":{"date":"2025-02-01T10:00:00Z"}}}]`)
+			return
+		}
+		fmt.Fprint(w, `[{"sha":"c1b","commit":{"message":"almost","author":{"date":"2025-01-02T10:00:00Z"}}},{"sha":"c1","commit":{"message":"init","author":{"date":"2025-01-01T10:00:00Z"}}}]`)
+	}))
+	defer srv.Close()
+
+	c := New("tok", WithBaseURL(srv.URL))
+	h, err := c.History(context.Background(), "o", "n", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(h.Recent) != 2 || h.Recent[0].SHA != "c3" || h.Recent[0].Subject != "third" {
+		t.Fatalf("recent = %+v", h.Recent)
+	}
+	if h.Root.SHA != "c1" || h.Root.Subject != "init" || h.Root.Date.Year() != 2025 {
+		t.Fatalf("root = %+v", h.Root)
+	}
+	if h.Total != 2*historyPageSize+2 {
+		t.Fatalf("total = %d", h.Total)
+	}
+	if len(pages) != 2 || pages[1] != "3" {
+		t.Fatalf("pages = %v", pages)
+	}
+}
+
+func TestHistorySinglePage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[{"sha":"b","commit":{"message":"second"}},{"sha":"a","commit":{"message":"first"}}]`)
+	}))
+	defer srv.Close()
+
+	h, err := New("tok", WithBaseURL(srv.URL)).History(context.Background(), "o", "n", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Root.SHA != "a" || h.Total != 2 {
+		t.Fatalf("history = %+v", h)
+	}
+}
+
+func TestHistoryEmptyRepo(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"Git Repository is empty."}`, http.StatusConflict)
+	}))
+	defer srv.Close()
+
+	if _, err := New("tok", WithBaseURL(srv.URL)).History(context.Background(), "o", "n", "main"); !errors.Is(err, provider.ErrEmpty) {
+		t.Fatalf("err = %v, want ErrEmpty", err)
+	}
+}
+
+func TestTreeKeepsBlobs(t *testing.T) {
+	var gotPath, gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotQuery = r.URL.Path, r.URL.RawQuery
+		fmt.Fprint(w, `{"tree":[{"path":"a.txt","type":"blob","sha":"1"},{"path":"dir","type":"tree","sha":"2"},{"path":"dir/b.txt","type":"blob","sha":"3"}],"truncated":false}`)
+	}))
+	defer srv.Close()
+
+	entries, err := New("tok", WithBaseURL(srv.URL)).Tree(context.Background(), "o", "n", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/repos/o/n/git/trees/main" || gotQuery != "recursive=1" {
+		t.Fatalf("request = %s?%s", gotPath, gotQuery)
+	}
+	if len(entries) != 2 || entries[0].Path != "a.txt" || entries[1].SHA != "3" {
+		t.Fatalf("entries = %+v", entries)
+	}
+}

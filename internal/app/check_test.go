@@ -28,6 +28,26 @@ type fakeProvider struct {
 	lookups   []string
 	base      string
 	bare      string
+	histories map[string]provider.History
+	trees     map[string][]provider.TreeEntry
+	treeCalls []string
+}
+
+func (f *fakeProvider) History(_ context.Context, owner, name, branch string) (provider.History, error) {
+	h, ok := f.histories[owner+"/"+name]
+	if !ok {
+		return provider.History{}, provider.ErrEmpty
+	}
+	return h, nil
+}
+
+func (f *fakeProvider) Tree(_ context.Context, owner, name, branch string) ([]provider.TreeEntry, error) {
+	f.treeCalls = append(f.treeCalls, owner+"/"+name)
+	entries, ok := f.trees[owner+"/"+name]
+	if !ok {
+		return nil, provider.ErrNotFound
+	}
+	return entries, nil
 }
 
 func (f *fakeProvider) Name() string { return "fake" }
@@ -409,5 +429,37 @@ func TestCollectRemoteOnlyCountsRenamedRepoOnce(t *testing.T) {
 	}
 	if len(inv.remoteOnly) != 1 || inv.remoteOnly[0].FullName != "tester/cloud" {
 		t.Fatalf("remoteOnly = %+v", inv.remoteOnly)
+	}
+}
+
+func TestCollectMatchesNonOriginRemote(t *testing.T) {
+	root := t.TempDir()
+	dir := repoWithOrigin(t, root, "tool", "https://gitlab.example/x/tool.git")
+	git(t, dir, "remote", "add", "github", "https://fake.test/tester/tool.git")
+
+	prov := &fakeProvider{repos: []provider.Repo{{Owner: "tester", Name: "tool", DefaultBranch: "main"}}}
+	pairs, inv, err := collect(context.Background(), prov, nil, config.Default(), []string{root}, options{}, &progress{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pairs) != 1 || pairs[0].remoteName != "github" || pairs[0].gitRemote() != "github" {
+		t.Fatalf("pairs = %+v", pairs)
+	}
+	if len(inv.localOnly) != 0 || len(inv.remoteOnly) != 0 {
+		t.Fatalf("localOnly = %+v, remoteOnly = %+v", inv.localOnly, inv.remoteOnly)
+	}
+}
+
+func TestCollectKeepsOriginKindWhenNoRemoteMatches(t *testing.T) {
+	root := t.TempDir()
+	dir := repoWithOrigin(t, root, "tool", "https://gitlab.example/x/tool.git")
+	git(t, dir, "remote", "add", "github", "https://fake.test/tester/gone.git")
+
+	_, inv, err := collect(context.Background(), &fakeProvider{}, nil, config.Default(), []string{root}, options{}, &progress{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inv.localOnly) != 1 || inv.localOnly[0].Kind != KindForeignRemote {
+		t.Fatalf("localOnly = %+v", inv.localOnly)
 	}
 }
