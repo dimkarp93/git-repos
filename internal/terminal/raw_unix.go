@@ -1,3 +1,5 @@
+//go:build linux || darwin
+
 package terminal
 
 import (
@@ -16,7 +18,7 @@ func ioctl(fd uintptr, req uintptr, arg *syscall.Termios) error {
 
 func MakeRaw(f *os.File) (restore func(), err error) {
 	var saved syscall.Termios
-	if err := ioctl(f.Fd(), syscall.TCGETS, &saved); err != nil {
+	if err := ioctl(f.Fd(), getTermios, &saved); err != nil {
 		return nil, err
 	}
 	raw := saved
@@ -24,8 +26,8 @@ func MakeRaw(f *os.File) (restore func(), err error) {
 	raw.Lflag &^= syscall.ECHO | syscall.ICANON | syscall.ISIG | syscall.IEXTEN
 	raw.Cc[syscall.VMIN] = 1
 	raw.Cc[syscall.VTIME] = 0
-	if err := ioctl(f.Fd(), syscall.TCSETS, &raw); err != nil {
+	if err := ioctl(f.Fd(), setTermios, &raw); err != nil {
 		return nil, err
 	}
-	return func() { ioctl(f.Fd(), syscall.TCSETS, &saved) }, nil
+	return func() { ioctl(f.Fd(), setTermios, &saved) }, nil
 }
