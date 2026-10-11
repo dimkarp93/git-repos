@@ -33,6 +33,7 @@ const (
 	KindNoOrigin      = "no-origin"
 	KindMissingRemote = "missing-remote"
 	KindForeignRemote = "foreign-remote"
+	KindNonOrigin     = "non-origin-remote"
 	KindUnreadable    = "unreadable"
 )
 
