@@ -50,7 +50,11 @@ func parseVersion(line string) (Version, error) {
 }
 
 func GitVersion(ctx context.Context) (Version, error) {
-	panic("not implemented")
+	out, _, err := run(ctx, "", "--version")
+	if err != nil {
+		return Version{}, err
+	}
+	return parseVersion(out)
 }
 
 func Worktrees(ctx context.Context, dir string) ([]Worktree, error) {
