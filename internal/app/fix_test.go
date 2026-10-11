@@ -242,6 +242,10 @@ func (f *fixFixture) run(t *testing.T, input string, opts options) (string, int,
 	c := newScriptedConfirmer(strings.NewReader(input), &out, opts.assumeYes)
 	st := s.linkMatches(matches, c, opts)
 	if !st.stopped {
+		s.guard, err = newGuard(s.ctx, append(append([]matched{}, inv.pairs...), st.linkedPairs...))
+		if err != nil {
+			t.Fatal(err)
+		}
 		s.syncNames(append(st.linkedPairs, differentNames(inv.pairs)...), inv.remotes, c, opts, &st)
 	}
 	f.last = st
@@ -496,6 +500,23 @@ func TestFixRenamesRemoteToLocalName(t *testing.T) {
 	}
 	if !strings.Contains(out, "remote origin updated") {
 		t.Errorf("output:\n%s", out)
+	}
+}
+
+func TestFixSkipsRenameForRepositoryWithWorktree(t *testing.T) {
+	f := newFixFixture(t, "tool")
+	dir := f.localCopy(t, "tool-cli")
+	git(t, dir, "worktree", "add", "-b", "feature", filepath.Join(t.TempDir(), "feature"))
+
+	out, linked, _, failed := f.run(t, "1\nlocal\n", options{})
+	if linked != 1 || failed != 0 || f.last.renamed != 0 || len(f.last.blocked) != 1 {
+		t.Fatalf("linked = %d, failed = %d, renamed = %d, blocked = %+v\n%s", linked, failed, f.last.renamed, f.last.blocked, out)
+	}
+	if strings.Contains(out, "rename the directory") {
+		t.Errorf("the rename was offered:\n%s", out)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("directory was touched: %v", err)
 	}
 }
 
