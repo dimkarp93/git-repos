@@ -92,6 +92,15 @@ func runRename(args []string) int {
 		newName = rest[1]
 	}
 
+	g, err := newGuard(s.ctx, inv.pairs)
+	if err != nil {
+		return fail(err)
+	}
+	if row, blocked := g.check(pair.local.Path); blocked {
+		printSkipped(s.printer, []skippedRepo{row})
+		return ExitFailure
+	}
+
 	if err := s.executeRename(pair, newName); err != nil {
 		return fail(err)
 	}

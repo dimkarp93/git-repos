@@ -45,18 +45,46 @@ func runCleanLocal(args []string) int {
 		return ExitOK
 	}
 
+	g, err := newGuard(s.ctx, nil)
+	if err != nil {
+		return fail(err)
+	}
+	var blocked []skippedRepo
+	candidates, blocked = guardCandidates(g, candidates)
+	printSkipped(s.printer, blocked)
+
 	if opts.dryRun {
 		for _, item := range candidates {
 			s.printer.Line(render.Orange, "  %s (%s)", shortPath(item.Path), item.Reason)
 		}
 		s.printer.Line("", "Deletion candidates: %d", len(candidates))
-		return ExitOK
+		return exitSkipped(blocked)
 	}
 
 	c := newConfirmer(opts.assumeYes)
 	deleted, failed := s.cleanLocal(candidates, c)
 	printCleanSummary(s, deleted, failed)
-	if failed > 0 {
+	if failed > 0 || len(blocked) > 0 {
+		return ExitFailure
+	}
+	return ExitOK
+}
+
+func guardCandidates(g *guard, candidates []LocalOnly) ([]LocalOnly, []skippedRepo) {
+	var kept []LocalOnly
+	var blocked []skippedRepo
+	for _, item := range candidates {
+		if row, skip := g.check(item.Path); skip {
+			blocked = append(blocked, row)
+			continue
+		}
+		kept = append(kept, item)
+	}
+	return kept, blocked
+}
+
+func exitSkipped(blocked []skippedRepo) int {
+	if len(blocked) > 0 {
 		return ExitFailure
 	}
 	return ExitOK

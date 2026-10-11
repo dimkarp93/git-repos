@@ -33,6 +33,7 @@ const (
 	KindNoOrigin      = "no-origin"
 	KindMissingRemote = "missing-remote"
 	KindForeignRemote = "foreign-remote"
+	KindNonOrigin     = "non-origin-remote"
 	KindUnreadable    = "unreadable"
 )
 
@@ -181,9 +182,17 @@ func collect(ctx context.Context, prov provider.Provider, store *cache.Cache, cf
 			continue
 		}
 		pair, found := matched{}, false
+		other := ""
 		for _, r := range remotesOf {
 			remote, full, ok := resolve(r.URL)
 			if !ok {
+				continue
+			}
+			if r.Name != "origin" {
+				seen[strings.ToLower(remote.FullName())] = true
+				if other == "" {
+					other = r.Name
+				}
 				continue
 			}
 			pair, found = matched{local: local, remote: remote, remoteName: r.Name}, true
@@ -198,6 +207,10 @@ func collect(ctx context.Context, prov provider.Provider, store *cache.Cache, cf
 			}
 			seen[strings.ToLower(pair.remote.FullName())] = true
 			inv.pairs = append(inv.pairs, pair)
+			continue
+		}
+		if other != "" {
+			inv.localOnly = append(inv.localOnly, LocalOnly{Path: local.Path, Kind: KindNonOrigin, Reason: "origin is not on " + prov.Name() + ", remote " + other + " is"})
 			continue
 		}
 		inv.localOnly = append(inv.localOnly, unmatchedLocal(prov, local.Path, account, originURLOf(remotesOf)))

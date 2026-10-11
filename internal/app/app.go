@@ -234,6 +234,7 @@ type session struct {
 	printer *render.Printer
 	pr      *progress
 	spinner *render.Spinner
+	guard   *guard
 }
 
 func (s *session) close() {

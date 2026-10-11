@@ -122,14 +122,21 @@ func runFix(args []string) int {
 	}
 	stats := s.linkMatches(candidates, c, opts)
 	if !stats.stopped {
-		s.syncNames(append(stats.linkedPairs, differ...), inv.remotes, c, opts, &stats)
+		namePairs := append(stats.linkedPairs, differ...)
+		if len(namePairs) > 0 {
+			if s.guard, err = newGuard(s.ctx, append(append([]matched{}, inv.pairs...), stats.linkedPairs...)); err != nil {
+				return fail(err)
+			}
+		}
+		s.syncNames(namePairs, inv.remotes, c, opts, &stats)
 	}
+	printSkipped(s.printer, stats.blocked)
 	if opts.dryRun {
 		s.printer.Line("", "Summary: possible links — %d · names differ — %d", len(candidates), stats.namesDiffer)
 		return ExitOK
 	}
 	s.printer.Line("", "Summary: linked — %d · renamed — %d · skipped — %d · errors — %d", stats.linked, stats.renamed, stats.skipped, stats.failed)
-	if stats.failed > 0 {
+	if stats.failed > 0 || len(stats.blocked) > 0 {
 		return ExitFailure
 	}
 	return ExitOK
@@ -143,6 +150,7 @@ type fixStats struct {
 	namesDiffer int
 	stopped     bool
 	linkedPairs []matched
+	blocked     []skippedRepo
 }
 
 func (s *session) localFacts(items []LocalOnly, account []provider.Repo, opts options) []*localFacts {
@@ -152,7 +160,7 @@ func (s *session) localFacts(items []LocalOnly, account []provider.Repo, opts op
 	}
 	usable := make([]LocalOnly, 0, len(items))
 	for _, item := range items {
-		if item.Kind != KindUnreadable && gitcmd.HasCommits(s.ctx, item.Path) {
+		if item.Kind != KindUnreadable && item.Kind != KindNonOrigin && gitcmd.HasCommits(s.ctx, item.Path) {
 			usable = append(usable, item)
 		}
 	}
@@ -690,6 +698,11 @@ func (s *session) syncNames(pairs []matched, account []provider.Repo, c *confirm
 		}
 		st.namesDiffer++
 		dir := pair.local.Path
+		if row, blocked := s.guard.check(dir); blocked {
+			st.blocked = append(st.blocked, row)
+			st.skipped++
+			continue
+		}
 		target := filepath.Join(filepath.Dir(dir), pair.remote.Name)
 		renamedFull := pair.remote.Owner + "/" + localName
 		p := s.printer
