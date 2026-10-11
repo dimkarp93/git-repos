@@ -33,14 +33,17 @@ prints the same list plus the common flags.
 ### diff
 
 1. Searches for `.git` recursively from the current directory (or from `-C <dir>`); once a repository
-   is found, it is not descended into.
+   is found, it is not descended into. Hidden directories (names starting with a dot, such as `~/.local`) are skipped,
+   except for a root given explicitly with `-C`. A linked worktree (`.git` is a file) counts as a repository too.
 2. Fetches the list of account repositories from the provider. The name from `origin` is matched
    case-insensitively, and if it is not in the list, a direct `GET /repos/{owner}/{name}` request is
    made, which follows the rename redirect. That way a repository renamed on GitHub, or written in a
-   different case in `origin`, does not end up both in "local only" and "remote only". When `origin` is missing,
-   points to another host or to a repository that does not exist, the other remotes are checked: the first one
-   pointing to an account repository links the pair (this is how `fix` adds, say, a `github` remote next to a
-   GitLab `origin`). `update`, `ff`, `push` and `sync` then use that remote.
+   different case in `origin`, does not end up both in "local only" and "remote only". `origin` is the only master
+   remote: `update`, `ff`, `push` and `sync` work only with it. When `origin` is missing, points to another host or
+   to a repository that does not exist, but another remote (a mirror) points to an account repository, the local
+   repository is listed as "local only" with the kind `non-origin-remote`. `fix` and `clean-remote` do not touch
+   such repositories. To make `origin` the master, rename the remotes: `git remote rename origin gitlab &&
+   git remote rename github origin`.
 3. Prints two tables:
    - **composition** — what exists only locally and only on the remote (matches are not shown);
    - **default branches** — who is behind whom.
@@ -151,6 +154,9 @@ Fast-forwards the local default branch to the already fetched `origin/<default-b
 It does not touch the network: run `update` first, then `ff`. When the branch is checked out it runs `git merge --ff-only`
 (git refuses if that would overwrite uncommitted changes), otherwise the branch is moved without touching the working tree.
 
+Run `ff` where the main clone with the default branch is in place. If the default branch is checked out in another
+worktree, git refuses to update it and `ff` reports an error; no data is lost.
+
 - `fast-forwarded +N` — the branch was moved; `up to date` — nothing to move; `ahead +N → push` — local commits are not pushed yet.
 - `conflict` — the histories have diverged. The branch is left alone, and after the table every such repository gets a
   "Version conflict" block with ready-made commands for three options: merge the histories; keep the local history
@@ -202,6 +208,8 @@ For every repository a question with no default answer is asked:
 to `yes-to-all` from the first repository, `--dry-run` prints the list of candidates. `clean-local` warns
 about uncommitted changes; `clean-remote` requires the `delete_repo` scope on the token.
 
+`clean-local` leaves out repositories with worktrees (see "Worktree").
+
 ### fix
 
 ```
@@ -239,7 +247,8 @@ A chosen remote repository is not offered again. If the local repository has a r
 repository that does not exist, the command offers to delete it (`[remove | keep]`). Without `origin` (or once it
 was removed) the new remote is `origin`; otherwise the command asks for its name, the provider name (`github`) by
 default. If that remote already exists it asks `[overwrite | rename]`: `overwrite` replaces its URL, `rename` goes
-back to the name prompt. Then the default branch is fetched and `git remote set-head` is run.
+back to the name prompt. Then the default branch is fetched and `git remote set-head` is run. Repositories that `diff`
+lists as `non-origin-remote` are not candidates.
 
 After linking, `fix` compares the names: the directory name and the name of the account repository. It does this
 both for the pairs it has just linked and for the pairs already linked through a remote. When the names differ it
@@ -249,7 +258,8 @@ asks `[local | remote | keep]`:
 - `keep` leaves both names.
 
 If the chosen name is taken (the directory exists or the account already has such a repository), the command
-says so and asks again.
+says so and asks again. For a repository with a worktree the question is not asked: it is skipped and
+listed in the table of skipped repositories (see "Worktree").
 
 `--yes` asks nothing: it links a pair only when the candidate is the only one or the only one with a shared first
 commit and skips the rest as `ambiguous`; the remote name is the default, dead remotes are kept and a taken name is
@@ -268,13 +278,38 @@ Before doing anything the command checks that exactly one local and exactly one 
 name, that they are linked through `origin`, and that the new name is valid (letters, digits, `-`, `_`, `.`) and
 does not clash with any local or remote short name. Then it renames the repository on the account, updates
 `origin` (keeping its ssh/https form) and renames the directory next to the old one. It requires a token that is
-allowed to administer the repository.
+allowed to administer the repository. Repositories with worktrees are skipped (see "Worktree").
 
 Without arguments an interactive mode starts (a terminal is required). The input field filters by substring the
 list of repositories that exist both locally and remotely under the same name (at most 20 shown, the most recently
 changed first) in a table of two 30-character columns. `↓`/`↑` move the selection, `Enter` picks the repository,
 `Esc` prints `Operation cancelled` and exits. Then the new name is entered (the current name is pre-filled);
 a validation error is shown in red and disappears on any key, `Esc` returns to the repository selection.
+
+## Worktree
+
+A repository can have several working directories (`git worktree add`, or the temporary ones that git-multi creates).
+Their branches are shared with the main clone, so `update`, `ff` and `push` are safe. Commands that rename or delete
+a directory are not: the worktrees keep absolute paths to the main clone and would break, and the commits of their
+branches live in the database of the main clone.
+
+| Command | Behaviour |
+| --- | --- |
+| `rename` | refuses to rename the chosen repository |
+| `fix` | links remotes as usual, but skips the directory rename for such repositories |
+| `clean-local` | leaves such repositories out of the deletion candidates |
+| `update`, `ff`, `push`, `sync`, `clean-remote`, `diff`, `status`, `do` | not affected |
+
+A repository is skipped when it has an additional worktree that stands on a branch (or is itself a linked worktree
+of another clone). These do not count: worktrees with a detached HEAD (temporary snapshots such as the ones git-multi
+creates), worktrees marked `prunable` (their directory is gone) and bare entries.
+
+For the skipped repositories a table is printed: path, reason, remote name, URL. The other repositories are processed
+as usual and the exit code is `2`. To go on, remove the extra worktrees (`git worktree remove <dir>`, or
+`git multi rm <name>`), or `git worktree prune` for the ones whose directory is gone.
+
+Git 2.31 or newer is required: the `prunable` field appears in `git worktree list --porcelain` starting with that
+version. With an older git these commands stop with an error.
 
 ## Installation
 
