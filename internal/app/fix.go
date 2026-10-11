@@ -152,7 +152,7 @@ func (s *session) localFacts(items []LocalOnly, account []provider.Repo, opts op
 	}
 	usable := make([]LocalOnly, 0, len(items))
 	for _, item := range items {
-		if item.Kind != KindUnreadable && gitcmd.HasCommits(s.ctx, item.Path) {
+		if item.Kind != KindUnreadable && item.Kind != KindNonOrigin && gitcmd.HasCommits(s.ctx, item.Path) {
 			usable = append(usable, item)
 		}
 	}
