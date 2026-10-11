@@ -60,5 +60,18 @@ func (g *guard) check(path string) (skippedRepo, bool) {
 }
 
 func printSkipped(p *render.Printer, rows []skippedRepo) {
-	panic("not implemented")
+	if len(rows) == 0 {
+		return
+	}
+	cells := make([][]render.Cell, 0, len(rows))
+	for _, row := range rows {
+		cells = append(cells, []render.Cell{
+			render.Plain(render.Ellipsis(shortPath(row.Path), maxPathWidth)),
+			{Text: row.Reason, Color: render.Orange},
+			render.Plain(row.Remote),
+			{Text: row.URL, Color: render.Grey},
+		})
+	}
+	p.Table("Skipped: repositories with worktrees", []string{"PATH", "REASON", "REMOTE", "URL"}, cells)
+	fmt.Fprintln(p.Out)
 }
