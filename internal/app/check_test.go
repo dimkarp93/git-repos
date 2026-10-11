@@ -432,7 +432,7 @@ func TestCollectRemoteOnlyCountsRenamedRepoOnce(t *testing.T) {
 	}
 }
 
-func TestCollectMatchesNonOriginRemote(t *testing.T) {
+func TestCollectKeepsNonOriginRemoteLocalOnly(t *testing.T) {
 	root := t.TempDir()
 	dir := repoWithOrigin(t, root, "tool", "https://gitlab.example/x/tool.git")
 	git(t, dir, "remote", "add", "github", "https://fake.test/tester/tool.git")
@@ -442,10 +442,34 @@ func TestCollectMatchesNonOriginRemote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pairs) != 1 || pairs[0].remoteName != "github" || pairs[0].gitRemote() != "github" {
+	if len(pairs) != 0 {
 		t.Fatalf("pairs = %+v", pairs)
 	}
-	if len(inv.localOnly) != 0 || len(inv.remoteOnly) != 0 {
+	if len(inv.localOnly) != 1 || inv.localOnly[0].Kind != KindNonOrigin || inv.localOnly[0].Orphan() {
+		t.Fatalf("localOnly = %+v", inv.localOnly)
+	}
+	if len(inv.remoteOnly) != 0 {
+		t.Fatalf("remoteOnly = %+v", inv.remoteOnly)
+	}
+}
+
+func TestCollectPrefersOriginOverOtherRemotes(t *testing.T) {
+	root := t.TempDir()
+	dir := repoWithOrigin(t, root, "tool", "https://fake.test/tester/tool.git")
+	git(t, dir, "remote", "add", "gitea", "https://fake.test/tester/mirror.git")
+
+	prov := &fakeProvider{repos: []provider.Repo{
+		{Owner: "tester", Name: "tool", DefaultBranch: "main"},
+		{Owner: "tester", Name: "mirror", DefaultBranch: "main"},
+	}}
+	pairs, inv, err := collect(context.Background(), prov, nil, config.Default(), []string{root}, options{}, &progress{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pairs) != 1 || pairs[0].remoteName != "origin" || pairs[0].remote.Name != "tool" {
+		t.Fatalf("pairs = %+v", pairs)
+	}
+	if len(inv.localOnly) != 0 || len(inv.remoteOnly) != 1 || inv.remoteOnly[0].FullName != "tester/mirror" {
 		t.Fatalf("localOnly = %+v, remoteOnly = %+v", inv.localOnly, inv.remoteOnly)
 	}
 }
