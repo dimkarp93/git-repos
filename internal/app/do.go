@@ -172,11 +172,6 @@ func doPhases(f filters) int {
 	return 4
 }
 
-type dirSet struct {
-	seen map[string]bool
-	out  []string
-}
-
 func selectRepos(s *session, opts options) ([]string, error) {
 	var dirs []string
 	var err error
