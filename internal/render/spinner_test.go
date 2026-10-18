@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 type syncBuffer struct {
@@ -37,9 +39,7 @@ func TestSpinnerDrawsLabelAndClearsOnStop(t *testing.T) {
 	s.Stop()
 
 	got := out.String()
-	if !strings.Contains(got, "in flight — 3") {
-		t.Fatalf("label missing: %q", got)
-	}
+	require.Contains(t, got, "in flight — 3", "label missing: %q", got)
 	if !strings.HasSuffix(got, "\r\x1b[K") {
 		t.Fatalf("line not cleared on stop: %q", got)
 	}
@@ -63,9 +63,7 @@ func TestSpinnerDisabledWritesNothing(t *testing.T) {
 	s.Start(func() string { return "x" })
 	time.Sleep(2 * spinnerInterval)
 	s.Stop()
-	if out.String() != "" {
-		t.Fatalf("disabled spinner wrote %q", out.String())
-	}
+	require.Equal(t, "", out.String(), "disabled spinner wrote %q", out.String())
 }
 
 func TestSpinnerRestartAndDoubleStop(t *testing.T) {

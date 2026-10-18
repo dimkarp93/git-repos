@@ -3,6 +3,9 @@ package config
 import (
 	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseScalarsAndLists(t *testing.T) {
@@ -15,12 +18,8 @@ roots:
 ignore: [node_modules, dist]
 `
 	r, err := parse(text)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r.scalars["provider"] != "github" {
-		t.Errorf("provider = %q", r.scalars["provider"])
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "github", r.scalars["provider"], "provider = %q", r.scalars["provider"])
 	if r.scalars["cache_dir"] != "/tmp/cache" {
 		t.Errorf("cache_dir = %q", r.scalars["cache_dir"])
 	}
@@ -35,9 +34,7 @@ ignore: [node_modules, dist]
 func TestMergeKeepsDefaults(t *testing.T) {
 	cfg := Config{Provider: "github", CacheDir: "/default", Ignore: []string{"vendor"}}
 	r, err := parse("roots:\n  - /srv\n")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	got := merge(cfg, r)
 	if got.Provider != "github" || got.CacheDir != "/default" {
 		t.Errorf("merge overwrote defaults: %+v", got)
@@ -51,17 +48,11 @@ func TestMergeKeepsDefaults(t *testing.T) {
 }
 
 func TestStripCommentKeepsHashInQuotes(t *testing.T) {
-	if got := stripComment(`cache_dir: "/tmp/a#b" # tail`); got != `cache_dir: "/tmp/a#b" ` {
-		t.Errorf("stripComment = %q", got)
-	}
+	assert.Equal(t, `cache_dir: "/tmp/a#b" `, stripComment(`cache_dir: "/tmp/a#b" # tail`))
 }
 
 func TestExpandPathTilde(t *testing.T) {
 	t.Setenv("HOME", "/home/tester")
-	if got := ExpandPath("~/work"); got != "/home/tester/work" {
-		t.Errorf("ExpandPath = %q", got)
-	}
-	if got := ExpandPath("/abs"); got != "/abs" {
-		t.Errorf("ExpandPath = %q", got)
-	}
+	assert.Equal(t, "/home/tester/work", ExpandPath("~/work"))
+	assert.Equal(t, "/abs", ExpandPath("/abs"))
 }

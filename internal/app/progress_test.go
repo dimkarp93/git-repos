@@ -1,6 +1,10 @@
 package app
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
 
 func TestProgressLabelPhases(t *testing.T) {
 	pr := &progress{}
@@ -34,7 +38,5 @@ func TestProgressLabelColors(t *testing.T) {
 	pr.setUnit("directories")
 	pr.step("~/tools/foo", 1)
 	want := "\x1b[1mphase 1/2 · local scan\x1b[0m · \x1b[90m~/tools/foo\x1b[0m · \x1b[32m25% (1 of 4 directories)\x1b[0m"
-	if got := pr.label(); got != want {
-		t.Fatalf("label = %q, want %q", got, want)
-	}
+	require.Equal(t, want, pr.label())
 }

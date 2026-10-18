@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/dimkarp93/git-repos/internal/render"
 )
 
@@ -15,9 +18,7 @@ func ffSetup(t *testing.T) (local, other string) {
 	t.Helper()
 	root := t.TempDir()
 	seed := filepath.Join(root, "seed")
-	if err := os.MkdirAll(seed, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(seed, 0o755))
 	git(t, seed, "init", "--initial-branch=main", "--quiet")
 	commit(t, seed, "a.txt")
 	origin := filepath.Join(root, "origin.git")
@@ -45,9 +46,7 @@ func TestFastForwardCheckedOutBranch(t *testing.T) {
 	if res.Outcome != ffForwarded || res.Behind != 1 || !res.CheckedOut {
 		t.Fatalf("res = %+v", res)
 	}
-	if got := git(t, local, "rev-parse", "HEAD"); got != head {
-		t.Errorf("HEAD = %s, want %s", got, head)
-	}
+	assert.Equal(t, head, git(t, local, "rev-parse", "HEAD"))
 	if _, err := os.Stat(filepath.Join(local, "b.txt")); err != nil {
 		t.Errorf("working tree not updated: %v", err)
 	}
@@ -62,12 +61,8 @@ func TestFastForwardBranchNotCheckedOut(t *testing.T) {
 	if res.Outcome != ffForwarded || res.CheckedOut {
 		t.Fatalf("res = %+v", res)
 	}
-	if got := git(t, local, "rev-parse", "refs/heads/main"); got != head {
-		t.Errorf("main = %s, want %s", got, head)
-	}
-	if got := git(t, local, "symbolic-ref", "--short", "HEAD"); got != "feature" {
-		t.Errorf("current branch = %s", got)
-	}
+	assert.Equal(t, head, git(t, local, "rev-parse", "refs/heads/main"))
+	assert.Equal(t, "feature", git(t, local, "symbolic-ref", "--short", "HEAD"))
 }
 
 func TestFastForwardUpToDate(t *testing.T) {
@@ -85,9 +80,7 @@ func TestFastForwardAhead(t *testing.T) {
 	if res.Outcome != ffAhead || res.Ahead != 1 {
 		t.Fatalf("res = %+v", res)
 	}
-	if got := git(t, local, "rev-parse", "HEAD"); got != head {
-		t.Errorf("HEAD moved to %s", got)
-	}
+	assert.Equal(t, head, git(t, local, "rev-parse", "HEAD"))
 }
 
 func TestFastForwardDivergedIsConflict(t *testing.T) {
@@ -102,26 +95,18 @@ func TestFastForwardDivergedIsConflict(t *testing.T) {
 	if res.LocalSHA != head || res.RemoteSHA != remote {
 		t.Errorf("shas = %s %s", res.LocalSHA, res.RemoteSHA)
 	}
-	if got := git(t, local, "rev-parse", "HEAD"); got != head {
-		t.Errorf("HEAD moved to %s", got)
-	}
+	assert.Equal(t, head, git(t, local, "rev-parse", "HEAD"))
 }
 
 func TestFastForwardRefusesToOverwriteLocalFiles(t *testing.T) {
 	local, other := ffSetup(t)
 	before := git(t, local, "rev-parse", "HEAD")
 	advanceOrigin(t, local, other, "b.txt")
-	if err := os.WriteFile(filepath.Join(local, "b.txt"), []byte("mine"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(filepath.Join(local, "b.txt"), []byte("mine"), 0o644))
 
 	res := fastForward(context.Background(), local, "origin", "main")
-	if res.Outcome != ffError {
-		t.Fatalf("res = %+v", res)
-	}
-	if got := git(t, local, "rev-parse", "HEAD"); got != before {
-		t.Errorf("HEAD moved to %s", got)
-	}
+	require.Equal(t, ffError, res.Outcome, "res = %+v", res)
+	assert.Equal(t, before, git(t, local, "rev-parse", "HEAD"))
 	if data, _ := os.ReadFile(filepath.Join(local, "b.txt")); string(data) != "mine" {
 		t.Errorf("local file overwritten: %q", data)
 	}
@@ -157,9 +142,7 @@ func TestPrintConflictSuggestsCommands(t *testing.T) {
 	var out bytes.Buffer
 	code := printFF(render.NewPrinter(&out, false), []ffResult{checkedOut})
 	text := out.String()
-	if code != ExitFailure {
-		t.Errorf("exit code = %d", code)
-	}
+	assert.Equal(t, ExitFailure, code, "exit code = %d", code)
 	for _, want := range []string{
 		"Version conflict: tester/repo (main)",
 		"git -C '/home/u/my repo' merge origin/main",
@@ -168,9 +151,7 @@ func TestPrintConflictSuggestsCommands(t *testing.T) {
 		"branch backup/main-aaaaaaa main",
 		"reset --hard origin/main",
 	} {
-		if !strings.Contains(text, want) {
-			t.Errorf("output lacks %q:\n%s", want, text)
-		}
+		assert.Contains(t, text, want, "output lacks %q:\n%s", want, text)
 	}
 	if strings.Contains(text, "checkout main") || strings.Contains(text, "branch -f") {
 		t.Errorf("unexpected commands for checked out branch:\n%s", text)
@@ -180,13 +161,9 @@ func TestPrintConflictSuggestsCommands(t *testing.T) {
 	printFF(render.NewPrinter(&out, false), []ffResult{base})
 	text = out.String()
 	for _, want := range []string{"checkout main", "branch -f main origin/main"} {
-		if !strings.Contains(text, want) {
-			t.Errorf("output lacks %q:\n%s", want, text)
-		}
+		assert.Contains(t, text, want, "output lacks %q:\n%s", want, text)
 	}
-	if strings.Contains(text, "reset --hard") {
-		t.Errorf("reset --hard suggested for a branch that is not checked out:\n%s", text)
-	}
+	assert.NotContains(t, text, "reset --hard", "reset --hard suggested for a branch that is not checked out:\n%s", text)
 }
 
 func TestPrintFFSucceedsWithoutConflicts(t *testing.T) {
@@ -199,7 +176,5 @@ func TestPrintFFSucceedsWithoutConflicts(t *testing.T) {
 	if code := printFF(render.NewPrinter(&out, false), results); code != ExitOK {
 		t.Errorf("exit code = %d", code)
 	}
-	if strings.Contains(out.String(), "Version conflict") {
-		t.Errorf("unexpected conflict block:\n%s", out.String())
-	}
+	assert.NotContains(t, out.String(), "Version conflict", "unexpected conflict block:\n%s", out.String())
 }

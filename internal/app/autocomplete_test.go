@@ -4,14 +4,14 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestCompleteArgsCommands(t *testing.T) {
 	got := completeArgs(nil)
 	for _, want := range []string{"diff", "status", "do", "update", "sync", "clean-local", "clean-remote", "completion", "help"} {
-		if !slices.Contains(got, want) {
-			t.Fatalf("completeArgs(nil) = %v, нет %q", got, want)
-		}
+		require.True(t, slices.Contains(got, want), "completeArgs(nil) = %v, нет %q", got, want)
 	}
 	if slices.Contains(got, completeCommand) {
 		t.Fatalf("completeArgs(nil) = %v, скрытая команда не должна попадать в кандидаты", got)
@@ -59,9 +59,7 @@ func TestCompleteArgs(t *testing.T) {
 				t.Fatalf("completeArgs(%v) = %v, ожидалось %v", tc.words, got, tc.want)
 			}
 			for _, want := range tc.has {
-				if !slices.Contains(got, want) {
-					t.Fatalf("completeArgs(%v) = %v, нет %q", tc.words, got, want)
-				}
+				require.True(t, slices.Contains(got, want), "completeArgs(%v) = %v, нет %q", tc.words, got, want)
 			}
 		})
 	}
@@ -72,9 +70,7 @@ func TestCommandsHaveFlags(t *testing.T) {
 		if cmd.hidden {
 			continue
 		}
-		if cmd.flags == nil {
-			t.Fatalf("команда %q без конструктора флагов", cmd.name)
-		}
+		require.NotNil(t, cmd.flags, "команда %q без конструктора флагов", cmd.name)
 		if cmd.summary == "" {
 			t.Fatalf("команда %q без описания", cmd.name)
 		}
@@ -84,9 +80,7 @@ func TestCommandsHaveFlags(t *testing.T) {
 func TestCompletionScripts(t *testing.T) {
 	for _, script := range []string{bashScript, zshScript} {
 		for _, want := range []string{completeCommand, directiveNone, directiveDirs, directiveDefault} {
-			if !strings.Contains(script, want) {
-				t.Fatalf("в скрипте нет %q", want)
-			}
+			require.Contains(t, script, want, "в скрипте нет %q", want)
 		}
 	}
 }
@@ -101,9 +95,7 @@ func TestShellFromEnv(t *testing.T) {
 		"/opt/bin/bash-5": "all",
 	}
 	for value, want := range cases {
-		if got := shellFromEnv(value); got != want {
-			t.Fatalf("shellFromEnv(%q) = %q, ожидалось %q", value, got, want)
-		}
+		require.Equal(t, want, shellFromEnv(value))
 	}
 }
 
@@ -124,12 +116,8 @@ func TestApplyRCLine(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got, action := applyRCLine(tc.text, line)
-			if got != tc.want {
-				t.Fatalf("applyRCLine(%q) = %q, ожидалось %q", tc.text, got, tc.want)
-			}
-			if action != tc.action {
-				t.Fatalf("applyRCLine(%q) действие %d, ожидалось %d", tc.text, action, tc.action)
-			}
+			require.Equal(t, tc.want, got, "applyRCLine(%q) = %q, ожидалось %q", tc.text, got, tc.want)
+			require.Equal(t, tc.action, action, "applyRCLine(%q) действие %d, ожидалось %d", tc.text, action, tc.action)
 		})
 	}
 }
@@ -151,12 +139,8 @@ func TestStripMarked(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got, removed := stripMarked(tc.text)
-			if got != tc.want {
-				t.Fatalf("stripMarked(%q) = %q, ожидалось %q", tc.text, got, tc.want)
-			}
-			if removed != tc.removed {
-				t.Fatalf("stripMarked(%q) removed = %v, ожидалось %v", tc.text, removed, tc.removed)
-			}
+			require.Equal(t, tc.want, got, "stripMarked(%q) = %q, ожидалось %q", tc.text, got, tc.want)
+			require.Equal(t, tc.removed, removed, "stripMarked(%q) removed = %v, ожидалось %v", tc.text, removed, tc.removed)
 		})
 	}
 }
@@ -165,9 +149,7 @@ func TestCompletionPathsRespectXDG(t *testing.T) {
 	t.Setenv("HOME", "/home/u")
 	t.Setenv("XDG_DATA_HOME", "/data")
 	p, err := newCompletionPaths()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if p.bashFile != "/data/bash-completion/completions/git-repos" {
 		t.Fatalf("bashFile = %q", p.bashFile)
 	}

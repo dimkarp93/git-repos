@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/dimkarp93/git-repos/internal/provider"
 	"github.com/dimkarp93/git-repos/internal/render"
 	"github.com/dimkarp93/git-repos/internal/scan"
@@ -35,9 +38,7 @@ func renameInventory(locals []string, remotes []string) inventory {
 
 func TestValidateRepoName(t *testing.T) {
 	for _, name := range []string{"tool", "my-tool_2.0", "A"} {
-		if err := validateRepoName(name); err != nil {
-			t.Errorf("validateRepoName(%q) = %v", name, err)
-		}
+		assert.NoError(t, validateRepoName(name))
 	}
 	for _, name := range []string{"", ".", "..", "a/b", "a b", "ы"} {
 		if err := validateRepoName(name); err == nil {
@@ -84,9 +85,7 @@ func TestFindRenamePair(t *testing.T) {
 
 func TestCheckNewName(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.Mkdir(filepath.Join(dir, "plain"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "plain"), 0o755))
 	inv := renameInventory(
 		[]string{filepath.Join(dir, "tool"), filepath.Join(dir, "other")},
 		[]string{"tool", "other", "remote-only"},
@@ -125,9 +124,7 @@ func TestRenameCandidates(t *testing.T) {
 	locals = append(locals, "/x/dup", "/y/dup", "/w/local-only")
 	remotes = append(remotes, "dup", "remote-only")
 	got := renameCandidates(context.Background(), renameInventory(locals, remotes))
-	if len(got) != maxRenameCandidates {
-		t.Fatalf("candidates = %d, want %d", len(got), maxRenameCandidates)
-	}
+	require.Len(t, got, maxRenameCandidates, "candidates = %d, want %d", len(got), maxRenameCandidates)
 	for _, c := range got {
 		if strings.HasPrefix(c.name, "dup") || c.name == "local-only" || c.name == "remote-only" {
 			t.Fatalf("unexpected candidate %q", c.name)
@@ -140,9 +137,7 @@ func TestRenameCandidatesSortedByActivity(t *testing.T) {
 	var locals, remotes []string
 	for _, name := range []string{"old", "new"} {
 		path := filepath.Join(dir, name)
-		if err := os.Mkdir(path, 0o755); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, os.Mkdir(path, 0o755))
 		git(t, path, "init", "-q")
 		locals = append(locals, path)
 		remotes = append(remotes, name)
@@ -161,9 +156,7 @@ func TestRenameCandidatesSortedByActivity(t *testing.T) {
 func TestExecuteRename(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "old")
-	if err := os.Mkdir(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Mkdir(dir, 0o755))
 	git(t, dir, "init", "-q")
 	git(t, dir, "remote", "add", "origin", "https://fake.test/tester/old.git")
 
@@ -173,9 +166,7 @@ func TestExecuteRename(t *testing.T) {
 	s := &session{ctx: context.Background(), prov: fake, printer: render.NewPrinter(&out, false)}
 	pair := matched{local: scan.Repo{Path: dir}, remote: remote}
 
-	if err := s.executeRename(pair, "fresh"); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, s.executeRename(pair, "fresh"))
 	if len(fake.renamed) != 1 || fake.renamed[0] != "tester/old->fresh" {
 		t.Fatalf("renamed = %v", fake.renamed)
 	}
@@ -189,17 +180,13 @@ func TestExecuteRename(t *testing.T) {
 	if url := git(t, target, "config", "--get", "remote.origin.url"); !strings.HasSuffix(url, "/fresh.git") {
 		t.Fatalf("origin = %q", url)
 	}
-	if !strings.Contains(out.String(), "Renamed old → fresh") {
-		t.Fatalf("output = %q", out.String())
-	}
+	require.Contains(t, out.String(), "Renamed old → fresh", "output = %q", out.String())
 }
 
 func TestExecuteRenameRemoteFailureKeepsLocal(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "old")
-	if err := os.Mkdir(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Mkdir(dir, 0o755))
 	git(t, dir, "init", "-q")
 	git(t, dir, "remote", "add", "origin", "https://fake.test/tester/old.git")
 
@@ -207,9 +194,7 @@ func TestExecuteRenameRemoteFailureKeepsLocal(t *testing.T) {
 	fake := &fakeProvider{repos: []provider.Repo{remote}, failOn: map[string]error{"rename:tester/old": provider.ErrForbidden}}
 	s := &session{ctx: context.Background(), prov: fake, printer: render.NewPrinter(&bytes.Buffer{}, false)}
 	err := s.executeRename(matched{local: scan.Repo{Path: dir}, remote: remote}, "fresh")
-	if !errors.Is(err, provider.ErrForbidden) {
-		t.Fatalf("err = %v", err)
-	}
+	require.True(t, errors.Is(err, provider.ErrForbidden))
 	if _, err := os.Stat(dir); err != nil {
 		t.Fatalf("local directory must stay: %v", err)
 	}
@@ -227,8 +212,6 @@ func TestProtocolOf(t *testing.T) {
 func mustTime(t *testing.T, value string) time.Time {
 	t.Helper()
 	parsed, err := time.Parse(time.RFC3339, value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return parsed
 }

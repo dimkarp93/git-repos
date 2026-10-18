@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/dimkarp93/git-repos/internal/cache"
 	"github.com/dimkarp93/git-repos/internal/config"
 	"github.com/dimkarp93/git-repos/internal/provider"
@@ -19,9 +22,7 @@ import (
 func newSession(t *testing.T, prov *fakeProvider, roots []string, out *bytes.Buffer) *session {
 	t.Helper()
 	store, err := cache.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	cfg := config.Default()
 	cfg.Protocol = provider.ProtocolHTTPS
 	return &session{
@@ -46,9 +47,7 @@ func bareProvider(t *testing.T) *fakeProvider {
 func TestPushMissingCreatesPrivateRepoAndPushes(t *testing.T) {
 	root := t.TempDir()
 	solo := filepath.Join(root, "solo")
-	if err := os.MkdirAll(solo, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(solo, 0o755))
 	git(t, solo, "init", "--initial-branch=main", "--quiet")
 	head := commit(t, solo, "a.txt")
 
@@ -74,9 +73,7 @@ func TestPushMissingCreatesPrivateRepoAndPushes(t *testing.T) {
 		t.Errorf("origin = %q", url)
 	}
 	pushed := git(t, filepath.Join(prov.bare, "solo.git"), "rev-parse", "main")
-	if pushed != head {
-		t.Errorf("pushed = %q, want %q", pushed, head)
-	}
+	assert.Equal(t, head, pushed, "pushed = %q, want %q", pushed, head)
 }
 
 func TestPushMissingSkipsForeignOwnerAndTakenName(t *testing.T) {
@@ -95,18 +92,10 @@ func TestPushMissingSkipsForeignOwnerAndTakenName(t *testing.T) {
 		},
 	}
 	actions := s.pushMissing(inv, options{})
-	if len(actions) != 2 {
-		t.Fatalf("actions = %+v", actions)
-	}
-	if !strings.Contains(actions[0].Detail, "another owner") {
-		t.Errorf("actions[0] = %+v", actions[0])
-	}
-	if !strings.Contains(actions[1].Detail, "conflict") {
-		t.Errorf("actions[1] = %+v", actions[1])
-	}
-	if len(prov.created) != 0 {
-		t.Fatalf("created = %v", prov.created)
-	}
+	require.Len(t, actions, 2, "actions = %+v", actions)
+	assert.Contains(t, actions[0].Detail, "another owner", "actions[0] = %+v", actions[0])
+	assert.Contains(t, actions[1].Detail, "conflict", "actions[1] = %+v", actions[1])
+	require.Len(t, prov.created, 0, "created = %v", prov.created)
 }
 
 func TestPushMissingDryRun(t *testing.T) {
@@ -119,9 +108,7 @@ func TestPushMissingDryRun(t *testing.T) {
 	if len(actions) != 1 || actions[0].Done || !strings.Contains(actions[0].Detail, "would create a private tester/x") {
 		t.Fatalf("actions = %+v", actions)
 	}
-	if len(prov.created) != 0 {
-		t.Fatalf("created = %v", prov.created)
-	}
+	require.Len(t, prov.created, 0, "created = %v", prov.created)
 }
 
 func TestPushMissingReportsCreateError(t *testing.T) {
@@ -143,9 +130,7 @@ func TestCloneMissingClonesIntoRoot(t *testing.T) {
 	source := filepath.Join(prov.bare, "cloud.git")
 	git(t, prov.bare, "init", "--bare", "--initial-branch=main", "--quiet", "cloud.git")
 	seed := filepath.Join(t.TempDir(), "seed")
-	if err := os.MkdirAll(seed, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(seed, 0o755))
 	git(t, seed, "init", "--initial-branch=main", "--quiet")
 	head := commit(t, seed, "a.txt")
 	git(t, seed, "remote", "add", "origin", source)
@@ -160,16 +145,12 @@ func TestCloneMissingClonesIntoRoot(t *testing.T) {
 	if len(actions) != 1 || !actions[0].Done || actions[0].Err != nil {
 		t.Fatalf("actions = %+v", actions)
 	}
-	if got := git(t, filepath.Join(root, "cloud"), "rev-parse", "main"); got != head {
-		t.Errorf("cloned head = %q, want %q", got, head)
-	}
+	assert.Equal(t, head, git(t, filepath.Join(root, "cloud"), "rev-parse", "main"))
 }
 
 func TestCloneMissingSkipsOccupiedDirectory(t *testing.T) {
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "cloud"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "cloud"), 0o755))
 	prov := bareProvider(t)
 	var out bytes.Buffer
 	s := newSession(t, prov, []string{root}, &out)
@@ -183,9 +164,7 @@ func TestCloneMissingSkipsOccupiedDirectory(t *testing.T) {
 func TestSyncPhasesReportProgress(t *testing.T) {
 	root := t.TempDir()
 	solo := filepath.Join(root, "solo")
-	if err := os.MkdirAll(solo, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(solo, 0o755))
 	git(t, solo, "init", "--initial-branch=main", "--quiet")
 	commit(t, solo, "a.txt")
 
@@ -202,9 +181,7 @@ func TestSyncPhasesReportProgress(t *testing.T) {
 	}
 
 	s.pushMissing(inv, options{})
-	if got := s.pr.label(); got != "phase 4/5 · creating on fake · 100% (1 of 1 repositories)" {
-		t.Fatalf("label = %q", got)
-	}
+	require.Equal(t, "phase 4/5 · creating on fake · 100% (1 of 1 repositories)", s.pr.label())
 
 	s.cloneMissing(inventory{}, root, options{})
 	if got := s.pr.label(); !strings.HasPrefix(got, "phase 5/5 · cloning into ") {
@@ -216,15 +193,11 @@ func TestFillEmptyPushesIntoEmptyRemote(t *testing.T) {
 	root := t.TempDir()
 	prov := bareProvider(t)
 	created, err := prov.CreateRepo(context.Background(), "solo", true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	created.DefaultBranch = "master"
 
 	local := filepath.Join(root, "solo")
-	if err := os.MkdirAll(local, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(local, 0o755))
 	git(t, local, "init", "--initial-branch=master", "--quiet")
 	head := commit(t, local, "a.txt")
 	git(t, local, "remote", "add", "origin", prov.RemoteURL(created, ""))
@@ -238,24 +211,18 @@ func TestFillEmptyPushesIntoEmptyRemote(t *testing.T) {
 		t.Fatalf("actions = %+v", actions)
 	}
 	pushed := strings.TrimSpace(git(t, local, "ls-remote", "origin", "refs/heads/master"))
-	if !strings.HasPrefix(pushed, head) {
-		t.Fatalf("ls-remote = %q, want %s", pushed, head)
-	}
+	require.True(t, strings.HasPrefix(pushed, head), "ls-remote = %q, want %s", pushed, head)
 }
 
 func TestFillEmptySkipsRepositoriesWithRemoteRefs(t *testing.T) {
 	root := t.TempDir()
 	prov := bareProvider(t)
 	created, err := prov.CreateRepo(context.Background(), "solo", true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	created.DefaultBranch = "master"
 
 	local := filepath.Join(root, "solo")
-	if err := os.MkdirAll(local, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(local, 0o755))
 	git(t, local, "init", "--initial-branch=master", "--quiet")
 	commit(t, local, "a.txt")
 	git(t, local, "remote", "add", "origin", prov.RemoteURL(created, ""))
@@ -275,15 +242,11 @@ func TestFillEmptyDryRun(t *testing.T) {
 	root := t.TempDir()
 	prov := bareProvider(t)
 	created, err := prov.CreateRepo(context.Background(), "solo", true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	created.DefaultBranch = "master"
 
 	local := filepath.Join(root, "solo")
-	if err := os.MkdirAll(local, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(local, 0o755))
 	git(t, local, "init", "--initial-branch=master", "--quiet")
 	commit(t, local, "a.txt")
 	git(t, local, "remote", "add", "origin", prov.RemoteURL(created, ""))

@@ -4,6 +4,9 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func originOf(t *testing.T, local string) string {
@@ -19,9 +22,7 @@ func TestPushDefaultPushesAheadBranch(t *testing.T) {
 	if res.Outcome != ffPushed || res.Ahead != 1 || res.UpstreamSet {
 		t.Fatalf("res = %+v", res)
 	}
-	if got := git(t, originOf(t, local), "rev-parse", "main"); got != head {
-		t.Errorf("origin main = %s, want %s", got, head)
-	}
+	assert.Equal(t, head, git(t, originOf(t, local), "rev-parse", "main"))
 }
 
 func TestPushDefaultSetsMissingUpstream(t *testing.T) {
@@ -36,9 +37,7 @@ func TestPushDefaultSetsMissingUpstream(t *testing.T) {
 	if got := git(t, local, "rev-parse", "--abbrev-ref", "main@{upstream}"); got != "origin/main" {
 		t.Errorf("upstream = %s", got)
 	}
-	if got := git(t, originOf(t, local), "rev-parse", "main"); got != head {
-		t.Errorf("origin main = %s, want %s", got, head)
-	}
+	assert.Equal(t, head, git(t, originOf(t, local), "rev-parse", "main"))
 }
 
 func TestPushDefaultCreatesMissingRemoteBranch(t *testing.T) {
@@ -54,9 +53,7 @@ func TestPushDefaultCreatesMissingRemoteBranch(t *testing.T) {
 	if res.Outcome != ffPushed || !res.UpstreamSet {
 		t.Fatalf("res = %+v", res)
 	}
-	if got := git(t, origin, "rev-parse", "main"); got != head {
-		t.Errorf("origin main = %s, want %s", got, head)
-	}
+	assert.Equal(t, head, git(t, origin, "rev-parse", "main"))
 }
 
 func TestPushDefaultLeavesOtherStatesAlone(t *testing.T) {
@@ -72,10 +69,6 @@ func TestPushDefaultLeavesOtherStatesAlone(t *testing.T) {
 
 	commit(t, local, "local.txt")
 	res := pushDefault(context.Background(), local, "origin", "main")
-	if res.Outcome != ffConflict {
-		t.Fatalf("diverged: res = %+v", res)
-	}
-	if got := git(t, originOf(t, local), "rev-parse", "main"); got != remote {
-		t.Errorf("origin main moved to %s", got)
-	}
+	require.Equal(t, ffConflict, res.Outcome, "diverged: res = %+v", res)
+	assert.Equal(t, remote, git(t, originOf(t, local), "rev-parse", "main"))
 }

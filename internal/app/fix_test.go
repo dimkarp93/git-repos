@@ -8,6 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/dimkarp93/git-repos/internal/provider"
 )
 
@@ -98,9 +101,7 @@ func TestRenderEvidence(t *testing.T) {
 		"→ diverged: local has 2 commits more, remote has 1 commit more",
 		"why: an identical commit SHA",
 	} {
-		if !strings.Contains(text, want) {
-			t.Errorf("missing %q in:\n%s", want, text)
-		}
+		assert.Contains(t, text, want, "missing %q in:\n%s", want, text)
 	}
 
 	remote.history.Recent = remote.history.Recent[:1]
@@ -135,9 +136,7 @@ func TestSharedSummary(t *testing.T) {
 		{40, 100, 512, "40 of the latest 100 remote commits (of 512) are in the local history"},
 	}
 	for _, tc := range cases {
-		if got := sharedSummary(tc.shared, tc.recent, tc.total); got != tc.want {
-			t.Errorf("sharedSummary(%d, %d, %d) = %q", tc.shared, tc.recent, tc.total, got)
-		}
+		assert.Equal(t, tc.want, sharedSummary(tc.shared, tc.recent, tc.total))
 	}
 }
 
@@ -185,9 +184,7 @@ func newFixFixture(t *testing.T, remoteName string) *fixFixture {
 	t.Helper()
 	root := t.TempDir()
 	upstream := filepath.Join(t.TempDir(), "upstream")
-	if err := os.MkdirAll(upstream, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(upstream, 0o755))
 	git(t, upstream, "init", "--initial-branch=main", "--quiet")
 	commit(t, upstream, "a.txt")
 	commit(t, upstream, "b.txt")
@@ -235,17 +232,13 @@ func (f *fixFixture) run(t *testing.T, input string, opts options) (string, int,
 	}
 	s.opts = opts
 	_, inv, err := collect(s.ctx, s.prov, s.store, s.cfg, s.roots, opts, s.pr)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	matches := s.findMatches(s.localFacts(inv.localOnly, inv.remotes, opts), s.remoteFacts(inv.remoteOnly, opts), opts)
 	c := newScriptedConfirmer(strings.NewReader(input), &out, opts.assumeYes)
 	st := s.linkMatches(matches, c, opts)
 	if !st.stopped {
 		s.guard, err = newGuard(s.ctx, append(append([]matched{}, inv.pairs...), st.linkedPairs...))
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		s.syncNames(append(st.linkedPairs, differentNames(inv.pairs)...), inv.remotes, c, opts, &st)
 	}
 	f.last = st
@@ -260,16 +253,10 @@ func TestFixAddsOriginWhenMissing(t *testing.T) {
 	if linked != 1 || failed != 0 {
 		t.Fatalf("linked = %d, failed = %d\n%s", linked, failed, out)
 	}
-	if got := git(t, dir, "remote", "get-url", "origin"); got != f.repo.CloneURL {
-		t.Fatalf("origin = %q", got)
-	}
-	if got := git(t, dir, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); got != "origin/main" {
-		t.Fatalf("origin/HEAD = %q", got)
-	}
+	require.Equal(t, f.repo.CloneURL, git(t, dir, "remote", "get-url", "origin"))
+	require.Equal(t, "origin/main", git(t, dir, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"))
 	for _, want := range []string{"tester/tool-cli", "(name differs)", "✓ same first commit", "all 2 remote commits are in the local history", "local is 1 commit ahead"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("output lacks %q:\n%s", want, out)
-		}
+		assert.Contains(t, out, want, "output lacks %q:\n%s", want, out)
 	}
 }
 
@@ -286,12 +273,8 @@ func TestFixExistingRemoteNameRenamed(t *testing.T) {
 	if !strings.Contains(out, "remote fake already exists (https://gitlab.example/x/mirror.git)") || !strings.Contains(out, "[overwrite | rename]") {
 		t.Errorf("no overwrite question:\n%s", out)
 	}
-	if got := git(t, dir, "remote", "get-url", "mine"); got != f.repo.CloneURL {
-		t.Fatalf("mine = %q", got)
-	}
-	if got := git(t, dir, "remote", "get-url", "fake"); got != "https://gitlab.example/x/mirror.git" {
-		t.Fatalf("fake changed to %q", got)
-	}
+	require.Equal(t, f.repo.CloneURL, git(t, dir, "remote", "get-url", "mine"))
+	require.Equal(t, "https://gitlab.example/x/mirror.git", git(t, dir, "remote", "get-url", "fake"))
 }
 
 func TestFixExistingRemoteNameOverwritten(t *testing.T) {
@@ -303,12 +286,8 @@ func TestFixExistingRemoteNameOverwritten(t *testing.T) {
 	if linked != 1 || failed != 0 {
 		t.Fatalf("linked = %d, failed = %d\n%s", linked, failed, out)
 	}
-	if got := git(t, dir, "remote", "get-url", "origin"); got != f.repo.CloneURL {
-		t.Fatalf("origin = %q", got)
-	}
-	if !strings.Contains(out, "remote origin overwritten") {
-		t.Errorf("output:\n%s", out)
-	}
+	require.Equal(t, f.repo.CloneURL, git(t, dir, "remote", "get-url", "origin"))
+	assert.Contains(t, out, "remote origin overwritten", "output:\n%s", out)
 }
 
 func TestFixExistingRemoteNameWithYesFails(t *testing.T) {
@@ -332,18 +311,10 @@ func TestFixRemovesDeadOrigin(t *testing.T) {
 	if linked != 1 || failed != 0 {
 		t.Fatalf("linked = %d, failed = %d\n%s", linked, failed, out)
 	}
-	if !strings.Contains(out, "remote origin → https://fake.test/tester/tool-cli.git: tester/tool-cli does not exist on fake") {
-		t.Errorf("no dead remote question:\n%s", out)
-	}
-	if strings.Contains(out, "Name of the new remote") {
-		t.Errorf("name asked although origin was freed:\n%s", out)
-	}
-	if got := git(t, dir, "remote"); got != "origin" {
-		t.Fatalf("remotes = %q", got)
-	}
-	if got := git(t, dir, "remote", "get-url", "origin"); got != f.repo.CloneURL {
-		t.Fatalf("origin = %q", got)
-	}
+	assert.Contains(t, out, "remote origin → https://fake.test/tester/tool-cli.git: tester/tool-cli does not exist on fake", "no dead remote question:\n%s", out)
+	assert.NotContains(t, out, "Name of the new remote", "name asked although origin was freed:\n%s", out)
+	require.Equal(t, "origin", git(t, dir, "remote"))
+	require.Equal(t, f.repo.CloneURL, git(t, dir, "remote", "get-url", "origin"))
 }
 
 func TestFixKeepsDeadOrigin(t *testing.T) {
@@ -352,15 +323,9 @@ func TestFixKeepsDeadOrigin(t *testing.T) {
 	git(t, dir, "remote", "add", "origin", "https://fake.test/tester/tool-cli.git")
 
 	out, linked, _, _ := f.run(t, "1\nkeep\n\n", options{})
-	if linked != 1 {
-		t.Fatalf("linked = %d\n%s", linked, out)
-	}
-	if got := git(t, dir, "remote", "get-url", "origin"); got != "https://fake.test/tester/tool-cli.git" {
-		t.Fatalf("origin = %q", got)
-	}
-	if got := git(t, dir, "remote", "get-url", "fake"); got != f.repo.CloneURL {
-		t.Fatalf("fake = %q", got)
-	}
+	require.Equal(t, 1, linked, "linked = %d\n%s", linked, out)
+	require.Equal(t, "https://fake.test/tester/tool-cli.git", git(t, dir, "remote", "get-url", "origin"))
+	require.Equal(t, f.repo.CloneURL, git(t, dir, "remote", "get-url", "fake"))
 }
 
 func TestFixYesKeepsDeadOrigin(t *testing.T) {
@@ -372,9 +337,7 @@ func TestFixYesKeepsDeadOrigin(t *testing.T) {
 	if linked != 1 || !strings.Contains(out, "kept remote origin") {
 		t.Fatalf("linked = %d\n%s", linked, out)
 	}
-	if got := git(t, dir, "remote", "get-url", "origin"); got != "https://fake.test/tester/tool-cli.git" {
-		t.Fatalf("origin = %q", got)
-	}
+	require.Equal(t, "https://fake.test/tester/tool-cli.git", git(t, dir, "remote", "get-url", "origin"))
 }
 
 func TestFixDefaultRemoteNameIsProvider(t *testing.T) {
@@ -383,12 +346,8 @@ func TestFixDefaultRemoteNameIsProvider(t *testing.T) {
 	git(t, dir, "remote", "add", "origin", "https://gitlab.example/x/tool.git")
 
 	out, linked, _, _ := f.run(t, "1\n\n", options{})
-	if linked != 1 {
-		t.Fatalf("linked = %d\n%s", linked, out)
-	}
-	if got := git(t, dir, "remote", "get-url", "fake"); got != f.repo.CloneURL {
-		t.Fatalf("fake = %q", got)
-	}
+	require.Equal(t, 1, linked, "linked = %d\n%s", linked, out)
+	require.Equal(t, f.repo.CloneURL, git(t, dir, "remote", "get-url", "fake"))
 }
 
 func TestFixDryRunChangesNothing(t *testing.T) {
@@ -410,9 +369,7 @@ func TestFixOfferedRemoteIsNotReused(t *testing.T) {
 	second := f.localCopy(t, "two")
 
 	out, linked, _, _ := f.run(t, "1\n", options{})
-	if linked != 1 {
-		t.Fatalf("linked = %d\n%s", linked, out)
-	}
+	require.Equal(t, 1, linked, "linked = %d\n%s", linked, out)
 	if strings.Count(out, "1) tester/tool") != 1 {
 		t.Fatalf("remote offered twice:\n%s", out)
 	}
@@ -438,14 +395,10 @@ func TestFixYesSkipsAmbiguous(t *testing.T) {
 func TestFixMatchesByFilesWithoutHistory(t *testing.T) {
 	f := newFixFixture(t, "tool")
 	dir := filepath.Join(f.root, "fresh")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(dir, 0o755))
 	git(t, dir, "init", "--initial-branch=main", "--quiet")
 	for _, name := range []string{"a.txt", "b.txt"} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644))
 	}
 	git(t, dir, "add", ".")
 	git(t, dir, "commit", "--quiet", "-m", "fresh start")
@@ -458,9 +411,7 @@ func TestFixMatchesByFilesWithoutHistory(t *testing.T) {
 	if linked != 1 || !strings.Contains(out, "≈ 100% identical files (2 of 2)") {
 		t.Fatalf("linked = %d\n%s", linked, out)
 	}
-	if len(f.prov.treeCalls) != 1 {
-		t.Fatalf("treeCalls = %v", f.prov.treeCalls)
-	}
+	require.Len(t, f.prov.treeCalls, 1, "treeCalls = %v", f.prov.treeCalls)
 }
 
 func TestFixRenamesLocalDirToRemoteName(t *testing.T) {
@@ -472,16 +423,12 @@ func TestFixRenamesLocalDirToRemoteName(t *testing.T) {
 		t.Fatalf("linked = %d, failed = %d, renamed = %d\n%s", linked, failed, f.last.renamed, out)
 	}
 	for _, want := range []string{"Names differ:", "rename the directory", "[local | remote | keep]"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("output lacks %q:\n%s", want, out)
-		}
+		assert.Contains(t, out, want, "output lacks %q:\n%s", want, out)
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatalf("old dir still exists: %v", err)
 	}
-	if got := git(t, filepath.Join(f.root, "tool"), "remote", "get-url", "origin"); got != f.repo.CloneURL {
-		t.Fatalf("origin = %q", got)
-	}
+	require.Equal(t, f.repo.CloneURL, git(t, filepath.Join(f.root, "tool"), "remote", "get-url", "origin"))
 }
 
 func TestFixRenamesRemoteToLocalName(t *testing.T) {
@@ -498,9 +445,7 @@ func TestFixRenamesRemoteToLocalName(t *testing.T) {
 	if _, err := os.Stat(dir); err != nil {
 		t.Fatalf("local dir moved: %v", err)
 	}
-	if !strings.Contains(out, "remote origin updated") {
-		t.Errorf("output:\n%s", out)
-	}
+	assert.Contains(t, out, "remote origin updated", "output:\n%s", out)
 }
 
 func TestFixSkipsRenameForRepositoryWithWorktree(t *testing.T) {
@@ -512,9 +457,7 @@ func TestFixSkipsRenameForRepositoryWithWorktree(t *testing.T) {
 	if linked != 1 || failed != 0 || f.last.renamed != 0 || len(f.last.blocked) != 1 {
 		t.Fatalf("linked = %d, failed = %d, renamed = %d, blocked = %+v\n%s", linked, failed, f.last.renamed, f.last.blocked, out)
 	}
-	if strings.Contains(out, "rename the directory") {
-		t.Errorf("the rename was offered:\n%s", out)
-	}
+	assert.NotContains(t, out, "rename the directory", "the rename was offered:\n%s", out)
 	if _, err := os.Stat(dir); err != nil {
 		t.Fatalf("directory was touched: %v", err)
 	}
@@ -523,9 +466,7 @@ func TestFixSkipsRenameForRepositoryWithWorktree(t *testing.T) {
 func TestFixRenameConflictAsksAgain(t *testing.T) {
 	f := newFixFixture(t, "tool")
 	dir := f.localCopy(t, "tool-cli")
-	if err := os.MkdirAll(filepath.Join(f.root, "tool"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(filepath.Join(f.root, "tool"), 0o755))
 	f.prov.repos = append(f.prov.repos, provider.Repo{Owner: "tester", Name: "tool-cli"})
 
 	out, _, skipped, failed := f.run(t, "1\nlocal\nremote\nkeep\n", options{})
@@ -573,7 +514,5 @@ func TestFixNamesDifferYesAndDryRun(t *testing.T) {
 	if _, err := os.Stat(dir); err != nil {
 		t.Fatalf("dir moved: %v", err)
 	}
-	if len(f.prov.renamed) != 0 {
-		t.Fatalf("renamed = %v", f.prov.renamed)
-	}
+	require.Len(t, f.prov.renamed, 0, "renamed = %v", f.prov.renamed)
 }

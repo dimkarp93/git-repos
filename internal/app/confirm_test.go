@@ -5,6 +5,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestConfirmerAnswers(t *testing.T) {
@@ -39,12 +42,8 @@ func TestConfirmerRequiresExplicitAnswer(t *testing.T) {
 	if err != nil || got != answerYes {
 		t.Fatalf("ask = %v, %v", got, err)
 	}
-	if !strings.Contains(out.String(), "pick an option explicitly") {
-		t.Errorf("no hint for empty answer: %q", out.String())
-	}
-	if !strings.Contains(out.String(), "unknown answer") {
-		t.Errorf("no hint for unknown answer: %q", out.String())
-	}
+	assert.Contains(t, out.String(), "pick an option explicitly", "no hint for empty answer: %q", out.String())
+	assert.Contains(t, out.String(), "unknown answer", "no hint for unknown answer: %q", out.String())
 	if strings.Count(out.String(), "[yes | yes-to-all | skip | skip-to-all]") != 4 {
 		t.Errorf("prompt count = %q", out.String())
 	}
@@ -57,9 +56,7 @@ func TestConfirmerAssumeYesSkipsPrompt(t *testing.T) {
 	if err != nil || got != answerYes {
 		t.Fatalf("ask = %v, %v", got, err)
 	}
-	if out.Len() != 0 {
-		t.Fatalf("prompted with --yes: %q", out.String())
-	}
+	require.Equal(t, 0, out.Len(), "prompted with --yes: %q", out.String())
 }
 
 func TestConfirmerEOFQuits(t *testing.T) {
@@ -91,9 +88,7 @@ func TestConfirmerChoose(t *testing.T) {
 	if _, ans, _ := c.choose("?", 3); ans != answerQuit {
 		t.Fatalf("third = %v", ans)
 	}
-	if !strings.Contains(out.String(), "[1..3 | skip | skip-to-all]") {
-		t.Fatalf("prompt = %q", out.String())
-	}
+	require.Contains(t, out.String(), "[1..3 | skip | skip-to-all]", "prompt = %q", out.String())
 }
 
 func TestConfirmerAskTextDefaultAndValidation(t *testing.T) {
@@ -109,9 +104,7 @@ func TestConfirmerAskTextDefaultAndValidation(t *testing.T) {
 	if err != nil || ans != answerYes || got != "github" {
 		t.Fatalf("askText = %q, %v, %v", got, ans, err)
 	}
-	if !strings.Contains(out.String(), "remote origin already exists") {
-		t.Fatalf("out = %q", out.String())
-	}
+	require.Contains(t, out.String(), "remote origin already exists", "out = %q", out.String())
 }
 
 func TestConfirmerAskTextYesToAll(t *testing.T) {

@@ -1,6 +1,10 @@
 package app
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
 
 func TestFiltersMatchResult(t *testing.T) {
 	cases := []struct {
@@ -59,9 +63,7 @@ func TestFiltersMatchStatus(t *testing.T) {
 		{"view-фильтр не пропускает статусы", filters{behind: true}, both, false},
 	}
 	for _, tc := range cases {
-		if got := tc.f.matchStatus(tc.res); got != tc.want {
-			t.Errorf("%s: matchStatus = %v", tc.name, got)
-		}
+		assert.Equal(t, tc.want, tc.f.matchStatus(tc.res))
 	}
 }
 
@@ -83,9 +85,7 @@ func TestFiltersMatchName(t *testing.T) {
 		{"project и branch — один не совпал", filters{project: "repos", branch: "dev"}, false},
 	}
 	for _, tc := range cases {
-		if got := tc.f.matchResult(repo); got != tc.want {
-			t.Errorf("%s: matchResult = %v", tc.name, got)
-		}
+		assert.Equal(t, tc.want, tc.f.matchResult(repo))
 	}
 }
 
@@ -102,9 +102,7 @@ func TestFiltersMatchNameStatus(t *testing.T) {
 		{"branch не совпадает", filters{branch: "main"}, false},
 	}
 	for _, tc := range cases {
-		if got := tc.f.matchStatus(res); got != tc.want {
-			t.Errorf("%s: matchStatus = %v", tc.name, got)
-		}
+		assert.Equal(t, tc.want, tc.f.matchStatus(res))
 	}
 }
 

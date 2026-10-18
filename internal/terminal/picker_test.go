@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func keyOf(kind KeyKind) Key { return Key{Kind: kind} }
@@ -41,13 +43,9 @@ func TestPickerFilterAndSelection(t *testing.T) {
 		t.Fatalf("index = %d", p.index)
 	}
 	feed(p, keyOf(KeyDown), keyOf(KeyDown))
-	if p.index != 2 {
-		t.Fatalf("index must stay in range, got %d", p.index)
-	}
+	require.Equal(t, 2, p.index, "index must stay in range, got %d", p.index)
 	feed(p, keyOf(KeyUp))
-	if p.index != 1 {
-		t.Fatalf("index = %d", p.index)
-	}
+	require.Equal(t, 1, p.index, "index = %d", p.index)
 	feed(p, typed("A")...)
 	if got := p.Visible(); len(got) != 3 || p.index != 0 {
 		t.Fatalf("visible = %v, index = %d", got, p.index)
@@ -88,9 +86,7 @@ func TestPickerNameStep(t *testing.T) {
 		t.Fatalf("problem must be red: %q", lines)
 	}
 	feed(p, keyOf(KeyUp))
-	if p.problem != "" {
-		t.Fatal("any key must clear the problem")
-	}
+	require.Equal(t, "", p.problem, "any key must clear the problem")
 	feed(p, keyOf(KeyBackspace), keyOf(KeyBackspace), keyOf(KeyBackspace), keyOf(KeyBackspace))
 	feed(p, typed("taken")...)
 	feed(p, keyOf(KeyEnter))
@@ -113,9 +109,7 @@ func TestPickerEscReturnsToSelection(t *testing.T) {
 	if done, cancelled := feed(p, keyOf(KeyEsc)); done || cancelled || p.choosing {
 		t.Fatal("Esc must return to the selection step")
 	}
-	if p.filter.String() != "a" {
-		t.Fatalf("filter = %q, must be kept", p.filter.String())
-	}
+	require.Equal(t, "a", p.filter.String(), "filter = %q, must be kept", p.filter.String())
 }
 
 func TestPickerRun(t *testing.T) {
@@ -137,9 +131,7 @@ func TestPickerRun(t *testing.T) {
 	if err != nil || cancelled || oldName != "beta" || newName != "beta2" {
 		t.Fatalf("got %q → %q, cancelled = %v, err = %v", oldName, newName, cancelled, err)
 	}
-	if !strings.Contains(out.String(), "┌") {
-		t.Fatalf("the table was not drawn: %q", out.String())
-	}
+	require.Contains(t, out.String(), "┌", "the table was not drawn: %q", out.String())
 }
 
 func TestPickerRunCancelled(t *testing.T) {

@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/stretchr/testify/require"
 )
 
 func kinds(keys []Key) []KeyKind {
@@ -80,17 +82,11 @@ func TestGridLayout(t *testing.T) {
 		items = append(items, "r"+string(rune('a'+i)))
 	}
 	lines := Grid(items, 0, 2, 30)
-	if len(lines) != 12 {
-		t.Fatalf("lines = %d, want 12", len(lines))
-	}
+	require.Len(t, lines, 12, "lines = %d, want 12", len(lines))
 	width := utf8.RuneCountInString(plain(lines[0]))
-	if width != 1+32+1+32+1 {
-		t.Fatalf("width = %d", width)
-	}
+	require.Equal(t, 1+32+1+32+1, width, "width = %d", width)
 	for _, line := range lines {
-		if got := utf8.RuneCountInString(plain(line)); got != width {
-			t.Fatalf("line %q width = %d, want %d", plain(line), got, width)
-		}
+		require.Equal(t, width, utf8.RuneCountInString(plain(line)))
 	}
 	if !strings.HasPrefix(plain(lines[1]), "│ ra ") || !strings.Contains(plain(lines[1]), "│ rk ") {
 		t.Fatalf("first row = %q", plain(lines[1]))
@@ -118,17 +114,11 @@ func TestScreenRedraw(t *testing.T) {
 	s.Draw([]string{"a", "b", "c"})
 	out.Reset()
 	s.Draw([]string{"x"})
-	if got := out.String(); got != "\x1b[2A\r\x1b[Jx" {
-		t.Fatalf("redraw = %q", got)
-	}
+	require.Equal(t, "\x1b[2A\r\x1b[Jx", out.String())
 	out.Reset()
 	s.Clear()
-	if got := out.String(); got != "\r\x1b[J" {
-		t.Fatalf("clear = %q", got)
-	}
+	require.Equal(t, "\r\x1b[J", out.String())
 	out.Reset()
 	s.Clear()
-	if out.Len() != 0 {
-		t.Fatalf("second clear wrote %q", out.String())
-	}
+	require.Equal(t, 0, out.Len(), "second clear wrote %q", out.String())
 }

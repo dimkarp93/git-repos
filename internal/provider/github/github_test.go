@@ -9,6 +9,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/dimkarp93/git-repos/internal/provider"
 )
 
@@ -42,9 +45,7 @@ func TestParseRemote(t *testing.T) {
 
 func TestNextLink(t *testing.T) {
 	header := `<https://api.github.com/user/repos?page=2>; rel="next", <https://api.github.com/user/repos?page=5>; rel="last"`
-	if got := nextLink(header); got != "https://api.github.com/user/repos?page=2" {
-		t.Fatalf("nextLink = %q", got)
-	}
+	require.Equal(t, "https://api.github.com/user/repos?page=2", nextLink(header))
 	if got := nextLink(`<https://api.github.com/user/repos?page=5>; rel="last"`); got != "" {
 		t.Fatalf("nextLink = %q, want empty", got)
 	}
@@ -53,9 +54,7 @@ func TestNextLink(t *testing.T) {
 func TestListReposPagination(t *testing.T) {
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Authorization"); got != "Bearer tok" {
-			t.Errorf("Authorization = %q", got)
-		}
+		assert.Equal(t, "Bearer tok", r.Header.Get("Authorization"))
 		page := r.URL.Query().Get("page")
 		w.Header().Set("Content-Type", "application/json")
 		if page == "" || page == "1" {
@@ -73,9 +72,7 @@ func TestListReposPagination(t *testing.T) {
 
 	c := New("tok", WithBaseURL(srv.URL))
 	repos, err := c.ListRepos(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(repos) != 2 || repos[0].FullName() != "o/a" || repos[1].FullName() != "o/b" {
 		t.Fatalf("repos = %+v", repos)
 	}
@@ -141,9 +138,7 @@ func TestCreateAndDeleteRepo(t *testing.T) {
 
 	c := New("tok", WithBaseURL(srv.URL))
 	repo, err := c.CreateRepo(context.Background(), "tool", true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if gotMethod != http.MethodPost || gotPath != "/user/repos" {
 		t.Fatalf("request = %s %s", gotMethod, gotPath)
 	}
@@ -153,9 +148,7 @@ func TestCreateAndDeleteRepo(t *testing.T) {
 	if repo.FullName() != "dimkarp93/tool" || !repo.Private {
 		t.Fatalf("repo = %+v", repo)
 	}
-	if err := c.DeleteRepo(context.Background(), "dimkarp93", "tool"); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, c.DeleteRepo(context.Background(), "dimkarp93", "tool"))
 	if gotMethod != http.MethodDelete || gotPath != "/repos/dimkarp93/tool" {
 		t.Fatalf("request = %s %s", gotMethod, gotPath)
 	}
@@ -188,16 +181,10 @@ func TestDeleteRepoForbidden(t *testing.T) {
 func TestRemoteURLProtocols(t *testing.T) {
 	c := New("")
 	repo := provider.Repo{Owner: "o", Name: "n"}
-	if got := c.RemoteURL(repo, provider.ProtocolSSH); got != "git@github.com:o/n.git" {
-		t.Errorf("ssh = %q", got)
-	}
-	if got := c.RemoteURL(repo, provider.ProtocolHTTPS); got != "https://github.com/o/n.git" {
-		t.Errorf("https = %q", got)
-	}
+	assert.Equal(t, "git@github.com:o/n.git", c.RemoteURL(repo, provider.ProtocolSSH))
+	assert.Equal(t, "https://github.com/o/n.git", c.RemoteURL(repo, provider.ProtocolHTTPS))
 	repo.SSHURL = "git@github.com:o/other.git"
-	if got := c.RemoteURL(repo, provider.ProtocolSSH); got != repo.SSHURL {
-		t.Errorf("ssh = %q", got)
-	}
+	assert.Equal(t, repo.SSHURL, c.RemoteURL(repo, provider.ProtocolSSH))
 }
 
 func TestRepoFollowsRename(t *testing.T) {
@@ -208,17 +195,13 @@ func TestRepoFollowsRename(t *testing.T) {
 		http.Redirect(w, r, srv.URL+"/repos/dimkarp93/new-name", http.StatusMovedPermanently)
 	})
 	mux.HandleFunc("/repos/dimkarp93/new-name", func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Authorization"); got != "Bearer tok" {
-			t.Errorf("Authorization lost on redirect: %q", got)
-		}
+		assert.Equal(t, "Bearer tok", r.Header.Get("Authorization"))
 		fmt.Fprint(w, `{"name":"new-name","default_branch":"main","private":true,"owner":{"login":"dimkarp93"}}`)
 	})
 
 	c := New("tok", WithBaseURL(srv.URL))
 	repo, err := c.Repo(context.Background(), "dimkarp93", "old-name")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if repo.FullName() != "dimkarp93/new-name" || repo.DefaultBranch != "main" {
 		t.Fatalf("repo = %+v", repo)
 	}
@@ -248,9 +231,7 @@ func (f *fakeSink) Done(done int)    { f.done = done }
 
 func TestLastPage(t *testing.T) {
 	header := `<https://api.github.com/user/repos?page=2>; rel="next", <https://api.github.com/user/repos?page=5>; rel="last"`
-	if got := lastPage(header); got != 5 {
-		t.Fatalf("lastPage = %d", got)
-	}
+	require.Equal(t, 5, lastPage(header))
 	if got := lastPage(`<https://api.github.com/user/repos?page=2>; rel="next"`); got != 0 {
 		t.Fatalf("lastPage = %d, want 0", got)
 	}
@@ -303,15 +284,11 @@ func TestRenameRepo(t *testing.T) {
 
 	c := New("tok", WithBaseURL(srv.URL))
 	repo, err := c.RenameRepo(context.Background(), "dimkarp93", "tool", "fresh")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if gotMethod != http.MethodPatch || gotPath != "/repos/dimkarp93/tool" {
 		t.Fatalf("request = %s %s", gotMethod, gotPath)
 	}
-	if gotBody["name"] != "fresh" {
-		t.Fatalf("body = %v", gotBody)
-	}
+	require.Equal(t, "fresh", gotBody["name"], "body = %v", gotBody)
 	if repo.FullName() != "dimkarp93/fresh" || repo.SSHURL != "git@github.com:dimkarp93/fresh.git" {
 		t.Fatalf("repo = %+v", repo)
 	}
@@ -349,9 +326,7 @@ func TestHistoryFollowsLastPage(t *testing.T) {
 
 	c := New("tok", WithBaseURL(srv.URL))
 	h, err := c.History(context.Background(), "o", "n", "main")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(h.Recent) != 2 || h.Recent[0].SHA != "c3" || h.Recent[0].Subject != "third" {
 		t.Fatalf("recent = %+v", h.Recent)
 	}
@@ -373,9 +348,7 @@ func TestHistorySinglePage(t *testing.T) {
 	defer srv.Close()
 
 	h, err := New("tok", WithBaseURL(srv.URL)).History(context.Background(), "o", "n", "main")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if h.Root.SHA != "a" || h.Total != 2 {
 		t.Fatalf("history = %+v", h)
 	}
@@ -401,9 +374,7 @@ func TestTreeKeepsBlobs(t *testing.T) {
 	defer srv.Close()
 
 	entries, err := New("tok", WithBaseURL(srv.URL)).Tree(context.Background(), "o", "n", "main")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if gotPath != "/repos/o/n/git/trees/main" || gotQuery != "recursive=1" {
 		t.Fatalf("request = %s?%s", gotPath, gotQuery)
 	}

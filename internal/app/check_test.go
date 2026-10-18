@@ -10,6 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/dimkarp93/git-repos/internal/cache"
 	"github.com/dimkarp93/git-repos/internal/config"
 	"github.com/dimkarp93/git-repos/internal/provider"
@@ -166,17 +169,13 @@ func git(t *testing.T, dir string, args ...string) string {
 		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
 	)
 	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
-	}
+	require.NoError(t, err)
 	return strings.TrimSpace(string(out))
 }
 
 func commit(t *testing.T, dir, name string) string {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644))
 	git(t, dir, "add", ".")
 	git(t, dir, "commit", "-m", name)
 	return git(t, dir, "rev-parse", "HEAD")
@@ -185,9 +184,7 @@ func commit(t *testing.T, dir, name string) string {
 func newRepo(t *testing.T, parent, full string) string {
 	t.Helper()
 	dir := filepath.Join(parent, filepath.Base(full))
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(dir, 0o755))
 	git(t, dir, "init", "--initial-branch=main", "--quiet")
 	git(t, dir, "remote", "add", "origin", "https://fake.test/"+full+".git")
 	return dir
@@ -197,9 +194,7 @@ func inspectOne(t *testing.T, dir string, prov *fakeProvider, full string, opts 
 	t.Helper()
 	owner, name, _ := strings.Cut(full, "/")
 	store, err := cache.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	pair := matched{
 		local:  scan.Repo{Path: dir},
 		remote: provider.Repo{Owner: owner, Name: name, DefaultBranch: "main"},
@@ -230,9 +225,7 @@ func TestInspectStatuses(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			prov := &fakeProvider{heads: map[string]string{"o/n@main": tc.head}}
 			res := inspectOne(t, dir, prov, "o/n", options{})
-			if res.Status != tc.want {
-				t.Fatalf("status = %q (%s), want %q", res.Status, res.Detail, tc.want)
-			}
+			require.Equal(t, tc.want, res.Status, "status = %q (%s), want %q", res.Status, res.Detail, tc.want)
 		})
 	}
 
@@ -253,9 +246,7 @@ func TestInspectUnknownCommitFallsBackToProvider(t *testing.T) {
 		remote: map[string]provider.CompareStatus{"o/n": provider.CompareBehind},
 	}
 	res := inspectOne(t, dir, prov, "o/n", options{})
-	if res.Status != StatusPull {
-		t.Fatalf("status = %q, want %q", res.Status, StatusPull)
-	}
+	require.Equal(t, StatusPull, res.Status, "status = %q, want %q", res.Status, StatusPull)
 
 	prov.remote = nil
 	res = inspectOne(t, dir, prov, "o/n", options{})
@@ -272,9 +263,7 @@ func TestInspectNoLocalBranch(t *testing.T) {
 
 	prov := &fakeProvider{heads: map[string]string{"o/n@main": "abc"}}
 	res := inspectOne(t, dir, prov, "o/n", options{})
-	if res.Status != StatusNoBranch {
-		t.Fatalf("status = %q, want %q", res.Status, StatusNoBranch)
-	}
+	require.Equal(t, StatusNoBranch, res.Status, "status = %q, want %q", res.Status, StatusNoBranch)
 }
 
 func TestBuildSplitsLocalAndRemoteOnly(t *testing.T) {
@@ -286,9 +275,7 @@ func TestBuildSplitsLocalAndRemoteOnly(t *testing.T) {
 	commit(t, orphan, "a.txt")
 
 	noRemote := filepath.Join(root, "solo")
-	if err := os.MkdirAll(noRemote, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(noRemote, 0o755))
 	git(t, noRemote, "init", "--initial-branch=main", "--quiet")
 	commit(t, noRemote, "a.txt")
 
@@ -300,43 +287,29 @@ func TestBuildSplitsLocalAndRemoteOnly(t *testing.T) {
 		heads: map[string]string{"o/shared@main": head},
 	}
 	store, err := cache.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	report, err := build(context.Background(), prov, store, []string{root}, config.Default(), options{jobs: 2}, &progress{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(report.Repos) != 1 || report.Repos[0].Status != StatusSynced {
 		t.Fatalf("repos = %+v", report.Repos)
 	}
 	if len(report.RemoteOnly) != 1 || report.RemoteOnly[0].FullName != "o/cloud" {
 		t.Fatalf("remote only = %+v", report.RemoteOnly)
 	}
-	if len(report.LocalOnly) != 2 {
-		t.Fatalf("local only = %+v", report.LocalOnly)
-	}
+	require.Len(t, report.LocalOnly, 2, "local only = %+v", report.LocalOnly)
 	reasons := map[string]string{}
 	for _, item := range report.LocalOnly {
 		reasons[filepath.Base(item.Path)] = item.Reason
 	}
-	if reasons["solo"] != "no origin" {
-		t.Errorf("solo reason = %q", reasons["solo"])
-	}
-	if !strings.Contains(reasons["orphan"], "not on fake") {
-		t.Errorf("orphan reason = %q", reasons["orphan"])
-	}
-	if !report.diverges() {
-		t.Error("diverges = false")
-	}
+	assert.Equal(t, "no origin", reasons["solo"], "solo reason = %q", reasons["solo"])
+	assert.Contains(t, reasons["orphan"], "not on fake", "orphan reason = %q", reasons["orphan"])
+	assert.True(t, report.diverges(), "diverges = false")
 }
 
 func repoWithOrigin(t *testing.T, parent, dir, origin string) string {
 	t.Helper()
 	path := filepath.Join(parent, dir)
-	if err := os.MkdirAll(path, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(path, 0o755))
 	git(t, path, "init", "--initial-branch=main", "--quiet")
 	git(t, path, "remote", "add", "origin", origin)
 	commit(t, path, "a.txt")
@@ -349,15 +322,11 @@ func TestCollectMatchesOriginCaseInsensitively(t *testing.T) {
 
 	prov := &fakeProvider{repos: []provider.Repo{{Owner: "tester", Name: "Fill_Food_AI", DefaultBranch: "main"}}}
 	pairs, inv, err := collect(context.Background(), prov, nil, config.Default(), []string{root}, options{}, &progress{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(pairs) != 1 || len(inv.localOnly) != 0 || len(inv.remoteOnly) != 0 {
 		t.Fatalf("pairs = %d, localOnly = %+v, remoteOnly = %+v", len(pairs), inv.localOnly, inv.remoteOnly)
 	}
-	if len(prov.lookups) != 0 {
-		t.Errorf("unnecessary API lookups: %v", prov.lookups)
-	}
+	assert.Len(t, prov.lookups, 0, "unnecessary API lookups: %v", prov.lookups)
 	if len(inv.mismatched) != 1 || inv.mismatched[0].Origin != "tester/fill_food_ai" || inv.mismatched[0].Canonical != "tester/Fill_Food_AI" {
 		t.Fatalf("mismatched = %+v", inv.mismatched)
 	}
@@ -373,9 +342,7 @@ func TestCollectFollowsRenamedRepository(t *testing.T) {
 		canonical: map[string]provider.Repo{"tester/old-name": renamed},
 	}
 	pairs, inv, err := collect(context.Background(), prov, nil, config.Default(), []string{root}, options{}, &progress{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(pairs) != 1 || pairs[0].remote.FullName() != "tester/new-name" {
 		t.Fatalf("pairs = %+v", pairs)
 	}
@@ -399,18 +366,12 @@ func TestCollectKeepsMissingRepositoryLocalOnly(t *testing.T) {
 
 	prov := &fakeProvider{}
 	pairs, inv, err := collect(context.Background(), prov, nil, config.Default(), []string{root}, options{}, &progress{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(pairs) != 0 || len(inv.localOnly) != 1 {
 		t.Fatalf("pairs = %d, localOnly = %+v", len(pairs), inv.localOnly)
 	}
-	if inv.localOnly[0].Kind != KindMissingRemote {
-		t.Errorf("kind = %q", inv.localOnly[0].Kind)
-	}
-	if len(inv.mismatched) != 0 {
-		t.Errorf("mismatched = %+v", inv.mismatched)
-	}
+	assert.Equal(t, KindMissingRemote, inv.localOnly[0].Kind, "kind = %q", inv.localOnly[0].Kind)
+	assert.Len(t, inv.mismatched, 0, "mismatched = %+v", inv.mismatched)
 }
 
 func TestCollectRemoteOnlyCountsRenamedRepoOnce(t *testing.T) {
@@ -424,9 +385,7 @@ func TestCollectRemoteOnlyCountsRenamedRepoOnce(t *testing.T) {
 		canonical: map[string]provider.Repo{"tester/old-name": renamed},
 	}
 	_, inv, err := collect(context.Background(), prov, nil, config.Default(), []string{root}, options{}, &progress{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(inv.remoteOnly) != 1 || inv.remoteOnly[0].FullName != "tester/cloud" {
 		t.Fatalf("remoteOnly = %+v", inv.remoteOnly)
 	}
@@ -439,18 +398,12 @@ func TestCollectKeepsNonOriginRemoteLocalOnly(t *testing.T) {
 
 	prov := &fakeProvider{repos: []provider.Repo{{Owner: "tester", Name: "tool", DefaultBranch: "main"}}}
 	pairs, inv, err := collect(context.Background(), prov, nil, config.Default(), []string{root}, options{}, &progress{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(pairs) != 0 {
-		t.Fatalf("pairs = %+v", pairs)
-	}
+	require.NoError(t, err)
+	require.Len(t, pairs, 0, "pairs = %+v", pairs)
 	if len(inv.localOnly) != 1 || inv.localOnly[0].Kind != KindNonOrigin || inv.localOnly[0].Orphan() {
 		t.Fatalf("localOnly = %+v", inv.localOnly)
 	}
-	if len(inv.remoteOnly) != 0 {
-		t.Fatalf("remoteOnly = %+v", inv.remoteOnly)
-	}
+	require.Len(t, inv.remoteOnly, 0, "remoteOnly = %+v", inv.remoteOnly)
 }
 
 func TestCollectPrefersOriginOverOtherRemotes(t *testing.T) {
@@ -463,9 +416,7 @@ func TestCollectPrefersOriginOverOtherRemotes(t *testing.T) {
 		{Owner: "tester", Name: "mirror", DefaultBranch: "main"},
 	}}
 	pairs, inv, err := collect(context.Background(), prov, nil, config.Default(), []string{root}, options{}, &progress{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(pairs) != 1 || pairs[0].remoteName != "origin" || pairs[0].remote.Name != "tool" {
 		t.Fatalf("pairs = %+v", pairs)
 	}
@@ -480,9 +431,7 @@ func TestCollectKeepsOriginKindWhenNoRemoteMatches(t *testing.T) {
 	git(t, dir, "remote", "add", "github", "https://fake.test/tester/gone.git")
 
 	_, inv, err := collect(context.Background(), &fakeProvider{}, nil, config.Default(), []string{root}, options{}, &progress{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(inv.localOnly) != 1 || inv.localOnly[0].Kind != KindForeignRemote {
 		t.Fatalf("localOnly = %+v", inv.localOnly)
 	}

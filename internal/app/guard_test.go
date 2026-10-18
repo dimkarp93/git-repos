@@ -7,6 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/dimkarp93/git-repos/internal/config"
 	"github.com/dimkarp93/git-repos/internal/provider"
 	"github.com/dimkarp93/git-repos/internal/render"
@@ -16,13 +19,9 @@ func newTestGuard(t *testing.T, roots ...string) *guard {
 	t.Helper()
 	prov := &fakeProvider{repos: []provider.Repo{{Owner: "tester", Name: "tool", DefaultBranch: "main"}}}
 	pairs, _, err := collect(context.Background(), prov, nil, config.Default(), roots, options{}, &progress{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	g, err := newGuard(context.Background(), pairs)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return g
 }
 
@@ -78,9 +77,7 @@ func TestGuardCandidatesSplitsBlocked(t *testing.T) {
 	git(t, busy, "worktree", "add", "-b", "feature", filepath.Join(t.TempDir(), "feature"))
 
 	g, err := newGuard(context.Background(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	kept, blocked := guardCandidates(g, []LocalOnly{{Path: plain}, {Path: busy}})
 	if len(kept) != 1 || kept[0].Path != plain || len(blocked) != 1 || blocked[0].Path != busy {
 		t.Fatalf("kept = %+v, blocked = %+v", kept, blocked)
@@ -95,13 +92,9 @@ func TestPrintSkippedRendersRows(t *testing.T) {
 	p := render.NewPrinter(&out, false)
 	printSkipped(p, []skippedRepo{{Path: "/src/tool", Reason: "worktrees: /wt/a", Remote: "origin", URL: "https://fake.test/tester/tool"}})
 	for _, want := range []string{"/src/tool", "worktrees: /wt/a", "origin", "https://fake.test/tester/tool"} {
-		if !strings.Contains(out.String(), want) {
-			t.Errorf("output lacks %q:\n%s", want, out.String())
-		}
+		assert.Contains(t, out.String(), want, "output lacks %q:\n%s", want, out.String())
 	}
 	out.Reset()
 	printSkipped(p, nil)
-	if out.Len() != 0 {
-		t.Errorf("output for no rows: %q", out.String())
-	}
+	assert.Equal(t, 0, out.Len(), "output for no rows: %q", out.String())
 }

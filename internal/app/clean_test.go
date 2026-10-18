@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/dimkarp93/git-repos/internal/provider"
 )
 
@@ -16,9 +19,7 @@ func makeDirs(t *testing.T, root string, names ...string) []LocalOnly {
 	items := make([]LocalOnly, 0, len(names))
 	for _, name := range names {
 		path := filepath.Join(root, name)
-		if err := os.MkdirAll(filepath.Join(path, ".git"), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, os.MkdirAll(filepath.Join(path, ".git"), 0o755))
 		items = append(items, LocalOnly{Path: path, Kind: KindNoOrigin, Reason: "no origin", Name: name})
 	}
 	return items
@@ -53,9 +54,7 @@ func TestCleanLocalSkipToAllStops(t *testing.T) {
 	c := newScriptedConfirmer(strings.NewReader("yes\nskip-to-all\nyes\n"), &out, false)
 
 	deleted, _ := s.cleanLocal(items, c)
-	if deleted != 1 {
-		t.Fatalf("deleted = %d", deleted)
-	}
+	require.Equal(t, 1, deleted, "deleted = %d", deleted)
 	if exists(items[0].Path) || !exists(items[1].Path) || !exists(items[2].Path) {
 		t.Fatalf("skip-to-all did not stop the command")
 	}
@@ -82,22 +81,16 @@ func TestCleanLocalYesToAllDeletesRest(t *testing.T) {
 func TestCleanLocalWarnsAboutDirtyTree(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "dirty")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(dir, 0o755))
 	git(t, dir, "init", "--initial-branch=main", "--quiet")
 	commit(t, dir, "a.txt")
-	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("changed"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("changed"), 0o644))
 
 	var out bytes.Buffer
 	s := newSession(t, bareProvider(t), []string{root}, &out)
 	c := newScriptedConfirmer(strings.NewReader("skip\n"), &out, false)
 	s.cleanLocal([]LocalOnly{{Path: dir, Kind: KindNoOrigin, Reason: "no origin"}}, c)
-	if !strings.Contains(out.String(), "uncommitted changes") {
-		t.Fatalf("no dirty warning: %q", out.String())
-	}
+	require.Contains(t, out.String(), "uncommitted changes", "no dirty warning: %q", out.String())
 }
 
 func TestCleanRemoteAnswers(t *testing.T) {
@@ -132,9 +125,7 @@ func TestCleanRemoteCountsErrors(t *testing.T) {
 	if deleted != 0 || failed != 1 {
 		t.Fatalf("deleted = %d, failed = %d", deleted, failed)
 	}
-	if !strings.Contains(out.String(), "no delete_repo scope") {
-		t.Errorf("error not reported: %q", out.String())
-	}
+	assert.Contains(t, out.String(), "no delete_repo scope", "error not reported: %q", out.String())
 }
 
 func TestCleanRemoteYesToAll(t *testing.T) {
