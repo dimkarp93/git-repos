@@ -88,30 +88,38 @@ func printPresence(p *render.Printer, report Report, f filters) {
 		fmt.Fprintln(p.Out)
 		return
 	}
-	rows := make([][]render.Cell, 0, max(len(report.LocalOnly), len(report.RemoteOnly)))
-	for i := 0; i < max(len(report.LocalOnly), len(report.RemoteOnly)); i++ {
-		local := render.Cell{}
-		if i < len(report.LocalOnly) {
-			item := report.LocalOnly[i]
-			text := render.Ellipsis(shortPath(item.Path), maxPathWidth)
-			if item.Reason != "" {
-				text += " (" + item.Reason + ")"
-			}
-			local = render.Cell{Text: text, Color: render.Orange}
-		}
-		remote := render.Cell{}
-		if i < len(report.RemoteOnly) {
-			item := report.RemoteOnly[i]
-			text := item.FullName
-			if item.Archived {
-				text += " (archived)"
-			}
-			remote = render.Cell{Text: text, Color: render.Yellow}
-		}
-		rows = append(rows, []render.Cell{local, remote})
+
+	n := max(len(report.LocalOnly), len(report.RemoteOnly))
+	rows := make([][]render.Cell, 0, n)
+	for i := range n {
+		rows = append(rows, []render.Cell{localOnlyCell(report.LocalOnly, i), remoteOnlyCell(report.RemoteOnly, i)})
 	}
 	p.Table("Repository sets", []string{"LOCAL ONLY", "REMOTE ONLY"}, rows)
 	fmt.Fprintln(p.Out)
+}
+
+func localOnlyCell(items []LocalOnly, i int) render.Cell {
+	if i >= len(items) {
+		return render.Cell{}
+	}
+
+	text := render.Ellipsis(shortPath(items[i].Path), maxPathWidth)
+	if items[i].Reason != "" {
+		text += " (" + items[i].Reason + ")"
+	}
+	return render.Cell{Text: text, Color: render.Orange}
+}
+
+func remoteOnlyCell(items []RemoteOnly, i int) render.Cell {
+	if i >= len(items) {
+		return render.Cell{}
+	}
+
+	text := items[i].FullName
+	if items[i].Archived {
+		text += " (archived)"
+	}
+	return render.Cell{Text: text, Color: render.Yellow}
 }
 
 func printMismatched(p *render.Printer, report Report) {
@@ -133,26 +141,11 @@ func printMismatched(p *render.Printer, report Report) {
 func printBranches(p *render.Printer, report Report, showAll bool) {
 	rows := make([][]render.Cell, 0, len(report.Repos))
 	for _, res := range report.Repos {
-		if !showAll && res.Status == StatusSynced {
-			continue
+		if showAll || res.Status != StatusSynced {
+			rows = append(rows, branchRow(res))
 		}
-		age, ageColor := render.FetchAge(res.FetchedAt, res.FetchKnown)
-		status := statusCell(res)
-		if res.Detail != "" {
-			status.Text = render.Ellipsis(status.Text+" ("+res.Detail+")", maxDetailWidth)
-		}
-		name := res.FullName
-		if res.OriginName != "" {
-			name += " (origin: " + res.OriginName + ")"
-		}
-		rows = append(rows, []render.Cell{
-			{Text: name, Color: render.Bold},
-			render.Plain(res.Branch),
-			status,
-			{Text: age, Color: ageColor},
-			{Text: render.Ellipsis(res.Path, maxPathWidth), Color: render.Grey},
-		})
 	}
+
 	if len(rows) == 0 {
 		if !showAll && len(report.Repos) > 0 {
 			return
@@ -163,6 +156,30 @@ func printBranches(p *render.Printer, report Report, showAll bool) {
 	}
 	p.Table("Default branch status", []string{"REPOSITORY", "BRANCH", "STATUS", "LAST FETCH", "PATH"}, rows)
 	fmt.Fprintln(p.Out)
+}
+
+func branchRow(res Result) []render.Cell {
+	age, ageColor := render.FetchAge(res.FetchedAt, res.FetchKnown)
+	status := statusCell(res)
+	if res.Detail != "" {
+		status.Text = render.Ellipsis(status.Text+" ("+res.Detail+")", maxDetailWidth)
+	}
+
+	return []render.Cell{
+		{Text: repoLabel(res), Color: render.Bold},
+		render.Plain(res.Branch),
+		status,
+		{Text: age, Color: ageColor},
+		{Text: render.Ellipsis(res.Path, maxPathWidth), Color: render.Grey},
+	}
+}
+
+func repoLabel(res Result) string {
+	if res.OriginName != "" {
+		return res.FullName + " (origin: " + res.OriginName + ")"
+	}
+
+	return res.FullName
 }
 
 func printSummary(p *render.Printer, report Report, f filters) {
