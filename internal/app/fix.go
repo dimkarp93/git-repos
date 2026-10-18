@@ -440,39 +440,50 @@ type evidenceLine struct {
 type evidenceLines []evidenceLine
 
 func renderEvidence(ev evidence) []evidenceLine {
-	var lines []evidenceLine
-	add := func(color, format string, args ...any) {
-		lines = append(lines, evidenceLine{color: color, text: fmt.Sprintf(format, args...)})
-	}
-	history := ev.remote.history
+	var lines evidenceLines
 	if ev.sharedRoot != nil {
-		add(render.Green, "✓ same first commit     %s", commitLine(*ev.sharedRoot))
+		lines.add(render.Green, "✓ same first commit     %s", commitLine(*ev.sharedRoot))
 	}
+
 	switch {
 	case len(ev.shared) > 0:
-		add(render.Green, "✓ %s", sharedSummary(len(ev.shared), len(history.Recent), history.Total))
-		for _, c := range ev.shared[:min(len(ev.shared), sharedCommitsShown)] {
-			add("", "    %s", commitLine(c))
-		}
-		if rest := len(ev.shared) - sharedCommitsShown; rest > 0 {
-			add(render.Grey, "    …and %d more", rest)
-		}
-		if text := aheadSummary(ev); text != "" {
-			add("", "→ %s", text)
-		}
-		add(render.Grey, "why: an identical commit SHA means identical files and identical history up to that commit")
+		lines.addShared(ev)
 	case ev.sharedRoot != nil:
-		add(render.Yellow, "✗ none of the latest %d remote commits are in the local history: the histories diverged long ago", len(history.Recent))
-		add(render.Grey, "why: an identical first commit SHA means both histories grew from the same start")
+		lines.add(render.Yellow, "✗ none of the latest %d remote commits are in the local history: the histories diverged long ago", len(ev.remote.history.Recent))
+		lines.add(render.Grey, "why: an identical first commit SHA means both histories grew from the same start")
 	case ev.sameFiles > 0:
-		add(render.Yellow, "≈ %d%% identical files (%d of %d), no common commits: the history was rewritten or started anew",
-			int(ev.similarity*100+0.5), ev.sameFiles, ev.totalFiles)
-		if len(ev.samplePaths) > 0 {
-			add("", "    same content: %s", strings.Join(ev.samplePaths, ", "))
-		}
-		add(render.Grey, "why: files with identical content hashes on the default branch and in the local HEAD")
+		lines.addFiles(ev)
 	}
 	return lines
+}
+
+func (l *evidenceLines) add(color, format string, args ...any) {
+	*l = append(*l, evidenceLine{color: color, text: fmt.Sprintf(format, args...)})
+}
+
+func (l *evidenceLines) addShared(ev evidence) {
+	history := ev.remote.history
+	l.add(render.Green, "✓ %s", sharedSummary(len(ev.shared), len(history.Recent), history.Total))
+	for _, c := range ev.shared[:min(len(ev.shared), sharedCommitsShown)] {
+		l.add("", "    %s", commitLine(c))
+	}
+	if rest := len(ev.shared) - sharedCommitsShown; rest > 0 {
+		l.add(render.Grey, "    …and %d more", rest)
+	}
+
+	if text := aheadSummary(ev); text != "" {
+		l.add("", "→ %s", text)
+	}
+	l.add(render.Grey, "why: an identical commit SHA means identical files and identical history up to that commit")
+}
+
+func (l *evidenceLines) addFiles(ev evidence) {
+	l.add(render.Yellow, "≈ %d%% identical files (%d of %d), no common commits: the history was rewritten or started anew",
+		int(ev.similarity*100+0.5), ev.sameFiles, ev.totalFiles)
+	if len(ev.samplePaths) > 0 {
+		l.add("", "    same content: %s", strings.Join(ev.samplePaths, ", "))
+	}
+	l.add(render.Grey, "why: files with identical content hashes on the default branch and in the local HEAD")
 }
 
 func sharedSummary(shared, recent, total int) string {
@@ -509,11 +520,15 @@ func plural(n int, word string) string {
 }
 
 func commitLine(c provider.Commit) string {
-	date := "          "
-	if !c.Date.IsZero() {
-		date = c.Date.Local().Format("2006-01-02")
+	return fmt.Sprintf("%s  %s  %s", shortSHA(c.SHA), commitDate(c), render.Ellipsis(c.Subject, 72))
+}
+
+func commitDate(c provider.Commit) string {
+	if c.Date.IsZero() {
+		return "          "
 	}
-	return fmt.Sprintf("%s  %s  %s", shortSHA(c.SHA), date, render.Ellipsis(c.Subject, 72))
+
+	return c.Date.Local().Format("2006-01-02")
 }
 
 func nameNote(ev evidence) string {
