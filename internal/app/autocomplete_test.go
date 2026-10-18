@@ -1,34 +1,35 @@
 package app
 
 import (
-	"slices"
-	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestCompleteArgsCommands(t *testing.T) {
 	got := completeArgs(nil)
+
 	for _, want := range []string{"diff", "status", "do", "update", "sync", "clean-local", "clean-remote", "completion", "help"} {
-		require.True(t, slices.Contains(got, want), "completeArgs(nil) = %v, нет %q", got, want)
+		t.Run(want, func(t *testing.T) {
+			assert.Contains(t, got, want)
+		})
 	}
-	if slices.Contains(got, completeCommand) {
-		t.Fatalf("completeArgs(nil) = %v, скрытая команда не должна попадать в кандидаты", got)
-	}
+	t.Run("hidden command", func(t *testing.T) {
+		assert.NotContains(t, got, completeCommand)
+	})
 }
 
-func TestCompleteArgs(t *testing.T) {
-	cases := []struct {
-		name  string
-		words []string
-		want  []string
-		has   []string
-	}{
+type completeCase struct {
+	name  string
+	words []string
+	want  []string
+}
+
+func exactCompletions() []completeCase {
+	return []completeCase{
 		{name: "prefix", words: []string{"cl"}, want: []string{"clean-local", "clean-remote"}},
-		{name: "diff flags", words: []string{"diff", "-"}, has: []string{"-fetch", "-local", "-timeout", "-json"}},
 		{name: "double dash", words: []string{"diff", "--f"}, want: []string{"--failed", "--fetch"}},
-		{name: "status filters", words: []string{"status", "-"}, has: []string{"-wip", "-hotfix", "-no-progress"}},
 		{name: "protocol", words: []string{"sync", "-protocol", ""}, want: []string{"ssh", "https"}},
 		{name: "protocol prefix", words: []string{"sync", "--protocol", "s"}, want: []string{"ssh"}},
 		{name: "provider", words: []string{"diff", "-provider", ""}, want: []string{"github"}},
@@ -52,15 +53,24 @@ func TestCompleteArgs(t *testing.T) {
 		{name: "no positional", words: []string{"update", ""}, want: []string{directiveNone}},
 		{name: "unknown flag", words: []string{"update", "-zzz"}, want: []string{directiveNone}},
 	}
+}
+
+func TestCompleteArgs(t *testing.T) {
+	for _, tc := range exactCompletions() {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, completeArgs(tc.words))
+		})
+	}
+}
+
+func TestCompleteArgsContains(t *testing.T) {
+	cases := []completeCase{
+		{name: "diff flags", words: []string{"diff", "-"}, want: []string{"-fetch", "-local", "-timeout", "-json"}},
+		{name: "status filters", words: []string{"status", "-"}, want: []string{"-wip", "-hotfix", "-no-progress"}},
+	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := completeArgs(tc.words)
-			if tc.want != nil && !slices.Equal(got, tc.want) {
-				t.Fatalf("completeArgs(%v) = %v, ожидалось %v", tc.words, got, tc.want)
-			}
-			for _, want := range tc.has {
-				require.True(t, slices.Contains(got, want), "completeArgs(%v) = %v, нет %q", tc.words, got, want)
-			}
+			assert.Subset(t, completeArgs(tc.words), tc.want)
 		})
 	}
 }
@@ -70,10 +80,10 @@ func TestCommandsHaveFlags(t *testing.T) {
 		if cmd.hidden {
 			continue
 		}
-		require.NotNil(t, cmd.flags, "команда %q без конструктора флагов", cmd.name)
-		if cmd.summary == "" {
-			t.Fatalf("команда %q без описания", cmd.name)
-		}
+		t.Run(cmd.name, func(t *testing.T) {
+			assert.NotNil(t, cmd.flags)
+			assert.NotEmpty(t, cmd.summary)
+		})
 	}
 }
 
@@ -139,27 +149,52 @@ func TestStripMarked(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got, removed := stripMarked(tc.text)
-			require.Equal(t, tc.want, got, "stripMarked(%q) = %q, ожидалось %q", tc.text, got, tc.want)
-			require.Equal(t, tc.removed, removed, "stripMarked(%q) removed = %v, ожидалось %v", tc.text, removed, tc.removed)
+			assert.Equal(t, []any{tc.want, tc.removed}, []any{got, removed})
 		})
 	}
 }
 
-func TestCompletionPathsRespectXDG(t *testing.T) {
+func xdgPaths(t *testing.T) completionPaths {
+	t.Helper()
+
 	t.Setenv("HOME", "/home/u")
 	t.Setenv("XDG_DATA_HOME", "/data")
 	p, err := newCompletionPaths()
 	require.NoError(t, err)
-	if p.bashFile != "/data/bash-completion/completions/git-repos" {
-		t.Fatalf("bashFile = %q", p.bashFile)
+
+	return p
+}
+
+func TestCompletionPathsRespectXDG(t *testing.T) {
+	p := xdgPaths(t)
+
+	want := completionPaths{
+		bashFile: "/data/bash-completion/completions/git-repos",
+		zshDir:   "/data/zsh/site-functions",
+		zshFile:  "/data/zsh/site-functions/_git-repos",
+		bashRC:   "/home/u/.bashrc",
+		zshRC:    "/home/u/.zshrc",
 	}
-	if p.zshFile != "/data/zsh/site-functions/_git-repos" {
-		t.Fatalf("zshFile = %q", p.zshFile)
-	}
-	if p.bashRC != "/home/u/.bashrc" || p.zshRC != "/home/u/.zshrc" {
-		t.Fatalf("rc = %q, %q", p.bashRC, p.zshRC)
-	}
-	if !strings.Contains(p.zshRCLine(), completionMarker) || !strings.Contains(p.bashRCLine(), completionMarker) {
-		t.Fatal("в строке для rc нет метки")
-	}
+	assert.Equal(t, want, p)
+}
+
+func TestCompletionPathsDefaultData(t *testing.T) {
+	t.Setenv("HOME", "/home/u")
+	t.Setenv("XDG_DATA_HOME", "")
+
+	p, err := newCompletionPaths()
+
+	require.NoError(t, err)
+	assert.Equal(t, "/home/u/.local/share/zsh/site-functions", p.zshDir)
+}
+
+func TestCompletionRCLinesCarryMarker(t *testing.T) {
+	p := xdgPaths(t)
+
+	t.Run("zsh", func(t *testing.T) {
+		assert.Contains(t, p.zshRCLine(), completionMarker)
+	})
+	t.Run("bash", func(t *testing.T) {
+		assert.Contains(t, p.bashRCLine(), completionMarker)
+	})
 }

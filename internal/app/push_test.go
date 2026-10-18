@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func originOf(t *testing.T, local string) string {
@@ -14,15 +13,29 @@ func originOf(t *testing.T, local string) string {
 	return git(t, local, "config", "--get", "remote.origin.url")
 }
 
+type ffView struct {
+	Outcome     ffOutcome
+	Ahead       int
+	Behind      int
+	UpstreamSet bool
+}
+
+func viewFF(res ffResult) ffView {
+	return ffView{Outcome: res.Outcome, Ahead: res.Ahead, Behind: res.Behind, UpstreamSet: res.UpstreamSet}
+}
+
 func TestPushDefaultPushesAheadBranch(t *testing.T) {
 	local, _ := ffSetup(t)
 	head := commit(t, local, "b.txt")
 
 	res := pushDefault(context.Background(), local, "origin", "main")
-	if res.Outcome != ffPushed || res.Ahead != 1 || res.UpstreamSet {
-		t.Fatalf("res = %+v", res)
-	}
-	assert.Equal(t, head, git(t, originOf(t, local), "rev-parse", "main"))
+
+	t.Run("result", func(t *testing.T) {
+		assert.Equal(t, ffView{Outcome: ffPushed, Ahead: 1}, viewFF(res))
+	})
+	t.Run("remote moved", func(t *testing.T) {
+		assert.Equal(t, head, git(t, originOf(t, local), "rev-parse", "main"))
+	})
 }
 
 func TestPushDefaultSetsMissingUpstream(t *testing.T) {
@@ -31,13 +44,16 @@ func TestPushDefaultSetsMissingUpstream(t *testing.T) {
 	head := commit(t, local, "b.txt")
 
 	res := pushDefault(context.Background(), local, "origin", "main")
-	if res.Outcome != ffPushed || !res.UpstreamSet {
-		t.Fatalf("res = %+v", res)
-	}
-	if got := git(t, local, "rev-parse", "--abbrev-ref", "main@{upstream}"); got != "origin/main" {
-		t.Errorf("upstream = %s", got)
-	}
-	assert.Equal(t, head, git(t, originOf(t, local), "rev-parse", "main"))
+
+	t.Run("result", func(t *testing.T) {
+		assert.Equal(t, ffView{Outcome: ffPushed, Ahead: 1, UpstreamSet: true}, viewFF(res))
+	})
+	t.Run("upstream", func(t *testing.T) {
+		assert.Equal(t, "origin/main", git(t, local, "rev-parse", "--abbrev-ref", "main@{upstream}"))
+	})
+	t.Run("remote moved", func(t *testing.T) {
+		assert.Equal(t, head, git(t, originOf(t, local), "rev-parse", "main"))
+	})
 }
 
 func TestPushDefaultCreatesMissingRemoteBranch(t *testing.T) {
@@ -50,25 +66,43 @@ func TestPushDefaultCreatesMissingRemoteBranch(t *testing.T) {
 	head := commit(t, local, "a.txt")
 
 	res := pushDefault(context.Background(), local, "origin", "main")
-	if res.Outcome != ffPushed || !res.UpstreamSet {
-		t.Fatalf("res = %+v", res)
-	}
-	assert.Equal(t, head, git(t, origin, "rev-parse", "main"))
+
+	t.Run("result", func(t *testing.T) {
+		assert.Equal(t, []any{ffPushed, true}, []any{res.Outcome, res.UpstreamSet})
+	})
+	t.Run("remote created", func(t *testing.T) {
+		assert.Equal(t, head, git(t, origin, "rev-parse", "main"))
+	})
 }
 
-func TestPushDefaultLeavesOtherStatesAlone(t *testing.T) {
-	local, other := ffSetup(t)
-	if res := pushDefault(context.Background(), local, "origin", "main"); res.Outcome != ffUpToDate {
-		t.Fatalf("up to date: res = %+v", res)
-	}
+func TestPushDefaultUpToDate(t *testing.T) {
+	local, _ := ffSetup(t)
 
-	remote := advanceOrigin(t, local, other, "b.txt")
-	if res := pushDefault(context.Background(), local, "origin", "main"); res.Outcome != ffBehind || res.Behind != 1 {
-		t.Fatalf("behind: res = %+v", res)
-	}
-
-	commit(t, local, "local.txt")
 	res := pushDefault(context.Background(), local, "origin", "main")
-	require.Equal(t, ffConflict, res.Outcome, "diverged: res = %+v", res)
-	assert.Equal(t, remote, git(t, originOf(t, local), "rev-parse", "main"))
+
+	assert.Equal(t, ffUpToDate, res.Outcome)
+}
+
+func TestPushDefaultLeavesBehindAlone(t *testing.T) {
+	local, other := ffSetup(t)
+	advanceOrigin(t, local, other, "b.txt")
+
+	res := pushDefault(context.Background(), local, "origin", "main")
+
+	assert.Equal(t, ffView{Outcome: ffBehind, Behind: 1}, viewFF(res))
+}
+
+func TestPushDefaultLeavesConflictAlone(t *testing.T) {
+	local, other := ffSetup(t)
+	remote := advanceOrigin(t, local, other, "b.txt")
+	commit(t, local, "local.txt")
+
+	res := pushDefault(context.Background(), local, "origin", "main")
+
+	t.Run("conflict", func(t *testing.T) {
+		assert.Equal(t, ffConflict, res.Outcome)
+	})
+	t.Run("remote untouched", func(t *testing.T) {
+		assert.Equal(t, remote, git(t, originOf(t, local), "rev-parse", "main"))
+	})
 }
