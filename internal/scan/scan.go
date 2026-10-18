@@ -40,6 +40,13 @@ func Find(opts Options) ([]Repo, error) {
 	return out, nil
 }
 
+type walker struct {
+	root string
+	opts Options
+	seen map[string]bool
+	out  *[]Repo
+}
+
 func walk(root string, opts Options, seen map[string]bool, out *[]Repo) error {
 	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
