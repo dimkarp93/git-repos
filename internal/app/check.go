@@ -355,28 +355,26 @@ func inspect(ctx context.Context, prov provider.Provider, store *cache.Cache, pa
 	}
 	res.FetchedAt, res.FetchKnown = gitcmd.LastFetch(ctx, pair.local.Path)
 
-	remoteSHA, err := prov.BranchHead(ctx, pair.remote.Owner, pair.remote.Name, branch)
+	return inspectHeads(ctx, prov, pair, res)
+}
+
+func inspectHeads(ctx context.Context, prov provider.Provider, pair matched, res Result) Result {
+	remoteSHA, err := prov.BranchHead(ctx, pair.remote.Owner, pair.remote.Name, res.Branch)
 	if err != nil {
-		res.Status = StatusError
-		res.Detail = errText(err)
-		return res
+		return res.failed(StatusError, errText(err))
 	}
 	res.RemoteSHA = remoteSHA
 
-	localSHA, err := gitcmd.RevParse(ctx, pair.local.Path, branch)
+	localSHA, err := gitcmd.RevParse(ctx, pair.local.Path, res.Branch)
+	if errors.Is(err, gitcmd.ErrNoRef) {
+		return res.failed(StatusNoBranch, "no local "+res.Branch)
+	}
 	if err != nil {
-		if errors.Is(err, gitcmd.ErrNoRef) {
-			res.Status = StatusNoBranch
-			res.Detail = "no local " + branch
-			return res
-		}
-		res.Status = StatusError
-		res.Detail = errText(err)
-		return res
+		return res.failed(StatusError, errText(err))
 	}
 	res.LocalSHA = localSHA
 
-	status, detail := compare(ctx, prov, pair, branch, localSHA, remoteSHA)
+	status, detail := compare(ctx, prov, pair, res.Branch, localSHA, remoteSHA)
 	res.Status = status
 	if detail != "" {
 		res.Detail = detail
@@ -384,36 +382,51 @@ func inspect(ctx context.Context, prov provider.Provider, store *cache.Cache, pa
 	return res
 }
 
+func (r Result) failed(status Status, detail string) Result {
+	r.Status = status
+	r.Detail = detail
+	return r
+}
+
 func compare(ctx context.Context, prov provider.Provider, pair matched, branch, localSHA, remoteSHA string) (Status, string) {
 	if localSHA == remoteSHA {
 		return StatusSynced, ""
 	}
-	dir := pair.local.Path
-	if gitcmd.HasCommit(ctx, dir, remoteSHA) {
-		localIsAncestor, err := gitcmd.IsAncestor(ctx, dir, localSHA, remoteSHA)
-		if err != nil {
-			return StatusError, errText(err)
-		}
-		if localIsAncestor {
-			return StatusPull, ""
-		}
-		remoteIsAncestor, err := gitcmd.IsAncestor(ctx, dir, remoteSHA, localSHA)
-		if err != nil {
-			return StatusError, errText(err)
-		}
-		if remoteIsAncestor {
-			return StatusPush, ""
-		}
-		return StatusConflict, ""
+	if gitcmd.HasCommit(ctx, pair.local.Path, remoteSHA) {
+		return compareLocally(ctx, pair.local.Path, localSHA, remoteSHA)
 	}
 
 	status, err := prov.Compare(ctx, pair.remote.Owner, pair.remote.Name, remoteSHA, localSHA)
+	if errors.Is(err, provider.ErrNotFound) {
+		return StatusUnknown, "local commit unknown remotely, run with --fetch"
+	}
 	if err != nil {
-		if errors.Is(err, provider.ErrNotFound) {
-			return StatusUnknown, "local commit unknown remotely, run with --fetch"
-		}
 		return StatusUnknown, errText(err)
 	}
+	return compareStatus(status)
+}
+
+func compareLocally(ctx context.Context, dir, localSHA, remoteSHA string) (Status, string) {
+	localIsAncestor, err := gitcmd.IsAncestor(ctx, dir, localSHA, remoteSHA)
+	if err != nil {
+		return StatusError, errText(err)
+	}
+	if localIsAncestor {
+		return StatusPull, ""
+	}
+
+	remoteIsAncestor, err := gitcmd.IsAncestor(ctx, dir, remoteSHA, localSHA)
+	switch {
+	case err != nil:
+		return StatusError, errText(err)
+	case remoteIsAncestor:
+		return StatusPush, ""
+	default:
+		return StatusConflict, ""
+	}
+}
+
+func compareStatus(status provider.CompareStatus) (Status, string) {
 	switch status {
 	case provider.CompareIdentical:
 		return StatusSynced, ""
@@ -434,14 +447,18 @@ func resolveBranch(store *cache.Cache, providerName string, repo provider.Repo, 
 		store.Set(key, repo.DefaultBranch)
 		return repo.DefaultBranch
 	}
-	ttl := cacheTTL
-	if refresh {
-		ttl = time.Nanosecond
-	}
-	if branch, ok := store.Get(key, ttl); ok {
+	if branch, ok := store.Get(key, branchTTL(refresh)); ok {
 		return branch
 	}
 	return ""
+}
+
+func branchTTL(refresh bool) time.Duration {
+	if refresh {
+		return time.Nanosecond
+	}
+
+	return cacheTTL
 }
 
 func shortPath(path string) string {
