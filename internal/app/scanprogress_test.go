@@ -5,57 +5,80 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/dimkarp93/git-repos/internal/cache"
 	"github.com/dimkarp93/git-repos/internal/config"
 )
 
-func TestScanEstimateBuckets(t *testing.T) {
+func resolvedTemp(t *testing.T) (string, string) {
+	t.Helper()
+
 	root := t.TempDir()
-	for _, name := range []string{"alpha", "beta", "gamma", ".hidden"} {
-		if err := os.MkdirAll(filepath.Join(root, name, "inner"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	est := newScanEstimate(config.Default(), []string{root}, nil)
-	if est.total != 3 || est.unit != "subtrees" {
-		t.Fatalf("total = %d, unit = %q", est.total, est.unit)
-	}
 	resolved, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		t.Fatal(err)
+	require.NoError(t, err)
+
+	return root, resolved
+}
+
+func subtreeEstimate(t *testing.T) (*scanEstimate, string) {
+	t.Helper()
+
+	root, resolved := resolvedTemp(t)
+	for _, name := range []string{"alpha", "beta", "gamma", ".hidden"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(root, name, "inner"), 0o755))
 	}
-	if got := est.visit(resolved); got != 0 {
-		t.Fatalf("visit(root) = %d", got)
+
+	return newScanEstimate(config.Default(), []string{root}, nil), resolved
+}
+
+func TestScanEstimatePlansSubtrees(t *testing.T) {
+	est, _ := subtreeEstimate(t)
+
+	assert.Equal(t, []any{3, "subtrees"}, []any{est.total, est.unit})
+}
+
+func TestScanEstimateBuckets(t *testing.T) {
+	est, resolved := subtreeEstimate(t)
+
+	got := []int{
+		est.visit(resolved),
+		est.visit(filepath.Join(resolved, "beta", "inner")),
+		est.visit(filepath.Join(resolved, "gamma")),
+		est.visit(filepath.Join(resolved, "alpha")),
+		est.visit("/elsewhere"),
 	}
-	if got := est.visit(filepath.Join(resolved, "beta", "inner")); got != 1 {
-		t.Fatalf("visit(beta) = %d", got)
-	}
-	if got := est.visit(filepath.Join(resolved, "gamma")); got != 2 {
-		t.Fatalf("visit(gamma) = %d", got)
-	}
+
+	assert.Equal(t, []int{0, 1, 2, 2, 2}, got)
+}
+
+func cachedEstimate(t *testing.T) (*scanEstimate, *cache.Cache, string) {
+	t.Helper()
+
+	root, resolved := resolvedTemp(t)
+	store, err := cache.Open(t.TempDir())
+	require.NoError(t, err)
+	store.SetDirs(cache.ScanKey(resolved), 40)
+
+	return newScanEstimate(config.Default(), []string{root}, store), store, resolved
 }
 
 func TestScanEstimateUsesCachedDirs(t *testing.T) {
-	root := t.TempDir()
-	store, err := cache.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	resolved, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	store.SetDirs(cache.ScanKey(resolved), 40)
+	est, _, _ := cachedEstimate(t)
 
-	est := newScanEstimate(config.Default(), []string{root}, store)
-	if !est.byDirs || est.total != 40 || est.unit != "directories" {
-		t.Fatalf("est = %+v", est)
-	}
-	if got := est.visit(resolved); got != 1 {
-		t.Fatalf("visit = %d", got)
-	}
-	est.save(store)
-	if dirs, ok := store.Dirs(cache.ScanKey(resolved)); !ok || dirs != 1 {
-		t.Fatalf("dirs = %d, ok = %v", dirs, ok)
-	}
+	assert.Equal(t, []any{true, 40, "directories"}, []any{est.byDirs, est.total, est.unit})
+}
+
+func TestScanEstimateSavesVisitedDirs(t *testing.T) {
+	est, store, resolved := cachedEstimate(t)
+
+	t.Run("counts visits", func(t *testing.T) {
+		assert.Equal(t, 1, est.visit(resolved))
+	})
+	t.Run("saves count", func(t *testing.T) {
+		est.save(store)
+		dirs, ok := store.Dirs(cache.ScanKey(resolved))
+		assert.Equal(t, []any{1, true}, []any{dirs, ok})
+	})
 }

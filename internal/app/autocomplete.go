@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"errors"
 	"flag"
 	"fmt"
@@ -64,43 +65,54 @@ func runCompleteHidden(args []string) int {
 
 func completeArgs(words []string) []string {
 	if len(words) == 0 {
-		words = []string{""}
+		return commandNames("")
 	}
+
 	cur := words[len(words)-1]
 	done := words[:len(words)-1]
 	if len(done) == 0 {
 		return commandNames(cur)
 	}
+
 	cmd, ok := lookupCommand(done[0])
 	if !ok || cmd.hidden || cmd.flags == nil {
 		return []string{directiveNone}
 	}
+
 	rest := done[1:]
 	fs := cmd.flags(&options{})
 	free, stopped := freeArgs(fs, rest)
 	if !stopped {
-		if values, ok := pendingValues(fs, rest, cur); ok {
+		if values, ok := flagCompletions(fs, rest, cur); ok {
 			return values
 		}
-		if strings.HasPrefix(cur, "-") {
-			return flagNames(fs, cur)
-		}
 	}
-	switch cmd.name {
-	case "do":
+	return positionalValues(cmd.name, free, cur)
+}
+
+func flagCompletions(fs *flag.FlagSet, rest []string, cur string) ([]string, bool) {
+	if values, ok := pendingValues(fs, rest, cur); ok {
+		return values, true
+	}
+	if strings.HasPrefix(cur, "-") {
+		return flagNames(fs, cur), true
+	}
+	return nil, false
+}
+
+func positionalValues(command string, free []string, cur string) []string {
+	switch {
+	case command == "do":
 		return []string{directiveDefault}
-	case "completion":
-		if len(free) > 0 {
-			return []string{directiveNone}
-		}
+	case len(free) > 0:
+		return []string{directiveNone}
+	case command == "completion":
 		return withPrefix(completionShells, cur)
-	case "install-completions", "uninstall-completions":
-		if len(free) > 0 {
-			return []string{directiveNone}
-		}
+	case command == "install-completions" || command == "uninstall-completions":
 		return withPrefix(completionTargets, cur)
+	default:
+		return []string{directiveNone}
 	}
-	return []string{directiveNone}
 }
 
 func lookupCommand(name string) (command, bool) {
@@ -181,10 +193,7 @@ func flagValues(name, prefix string) []string {
 }
 
 func flagNames(fs *flag.FlagSet, prefix string) []string {
-	dashes := "-"
-	if strings.HasPrefix(prefix, "--") {
-		dashes = "--"
-	}
+	dashes := dashesOf(prefix)
 	var names []string
 	fs.VisitAll(func(f *flag.Flag) {
 		names = append(names, dashes+f.Name)
@@ -194,6 +203,14 @@ func flagNames(fs *flag.FlagSet, prefix string) []string {
 		return []string{directiveNone}
 	}
 	return out
+}
+
+func dashesOf(prefix string) string {
+	if strings.HasPrefix(prefix, "--") {
+		return "--"
+	}
+
+	return "-"
 }
 
 func isFlagWord(arg string) bool {
@@ -290,10 +307,7 @@ func newCompletionPaths() (completionPaths, error) {
 	if err != nil {
 		return completionPaths{}, err
 	}
-	data := strings.TrimSpace(os.Getenv("XDG_DATA_HOME"))
-	if data == "" {
-		data = filepath.Join(home, ".local", "share")
-	}
+	data := cmp.Or(strings.TrimSpace(os.Getenv("XDG_DATA_HOME")), filepath.Join(home, ".local", "share"))
 	zshDir := filepath.Join(data, "zsh", "site-functions")
 	return completionPaths{
 		bashFile: filepath.Join(data, "bash-completion", "completions", "git-repos"),
@@ -333,34 +347,13 @@ func runUninstallCompletions(args []string) int {
 }
 
 func runCompletionSetup(args []string, flags func(*options) *flag.FlagSet, uninstall bool) int {
-	opts := options{}
-	fs := flags(&opts)
-	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return ExitOK
-		}
-		return ExitFailure
+	opts, free, code, ok := parseSetupArgs(args, flags)
+	if !ok {
+		return code
 	}
-	var free []string
-	for rest := fs.Args(); len(rest) > 0; rest = fs.Args() {
-		free = append(free, rest[0])
-		if err := fs.Parse(rest[1:]); err != nil {
-			if errors.Is(err, flag.ErrHelp) {
-				return ExitOK
-			}
-			return ExitFailure
-		}
-	}
-	if len(free) > 1 {
-		fmt.Fprintf(os.Stderr, "git-repos: extra arguments: %s\n", strings.Join(free[1:], " "))
-		return ExitFailure
-	}
-	target := shellFromEnv(os.Getenv("SHELL"))
-	if len(free) == 1 {
-		target = free[0]
-	}
-	if !slices.Contains(completionTargets, target) {
-		fmt.Fprintf(os.Stderr, "git-repos: unknown shell %q, available: %s\n", target, strings.Join(completionTargets, ", "))
+	target, err := setupTarget(free)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "git-repos: %v\n", err)
 		return ExitFailure
 	}
 
@@ -368,22 +361,61 @@ func runCompletionSetup(args []string, flags func(*options) *flag.FlagSet, unins
 	if err != nil {
 		return fail(err)
 	}
-	steps := []func(completionPaths, options) error{}
+	for _, step := range setupSteps(target, uninstall) {
+		if err := step(paths, opts); err != nil {
+			return fail(err)
+		}
+	}
+
+	if !uninstall && !opts.dryRun {
+		fmt.Println("Open a new shell or run: exec $SHELL -l")
+	}
+	return ExitOK
+}
+
+func parseSetupArgs(args []string, flags func(*options) *flag.FlagSet) (options, []string, int, bool) {
+	opts := options{}
+	fs := flags(&opts)
+	if err := fs.Parse(args); err != nil {
+		return opts, nil, parseExit(err), false
+	}
+
+	var free []string
+	for rest := fs.Args(); len(rest) > 0; rest = fs.Args() {
+		free = append(free, rest[0])
+		if err := fs.Parse(rest[1:]); err != nil {
+			return opts, nil, parseExit(err), false
+		}
+	}
+	return opts, free, ExitOK, true
+}
+
+func setupTarget(free []string) (string, error) {
+	if len(free) > 1 {
+		return "", fmt.Errorf("extra arguments: %s", strings.Join(free[1:], " "))
+	}
+
+	var target string
+	if len(free) == 1 {
+		target = free[0]
+	} else {
+		target = shellFromEnv(os.Getenv("SHELL"))
+	}
+	if !slices.Contains(completionTargets, target) {
+		return "", fmt.Errorf("unknown shell %q, available: %s", target, strings.Join(completionTargets, ", "))
+	}
+	return target, nil
+}
+
+func setupSteps(target string, uninstall bool) []func(completionPaths, options) error {
+	var steps []func(completionPaths, options) error
 	if target == "bash" || target == "all" {
 		steps = append(steps, bashStep(uninstall))
 	}
 	if target == "zsh" || target == "all" {
 		steps = append(steps, zshStep(uninstall))
 	}
-	for _, step := range steps {
-		if err := step(paths, opts); err != nil {
-			return fail(err)
-		}
-	}
-	if !uninstall && !opts.dryRun {
-		fmt.Println("Open a new shell or run: exec $SHELL -l")
-	}
-	return ExitOK
+	return steps
 }
 
 func bashStep(uninstall bool) func(completionPaths, options) error {

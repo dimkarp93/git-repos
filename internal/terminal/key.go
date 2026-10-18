@@ -28,18 +28,23 @@ type Key struct {
 
 type KeySource func() ([]Key, error)
 
+type stdinReader struct {
+	f   *os.File
+	buf []byte
+}
+
 func StdinKeys(f *os.File) KeySource {
-	buf := make([]byte, 256)
-	return func() ([]Key, error) {
-		n, err := f.Read(buf)
-		if n > 0 {
-			return ParseKeys(buf[:n]), nil
-		}
-		if err == nil {
-			return nil, nil
-		}
-		return nil, err
+	r := &stdinReader{f: f, buf: make([]byte, 256)}
+	return r.read
+}
+
+func (r *stdinReader) read() ([]Key, error) {
+	n, err := r.f.Read(r.buf)
+	if n > 0 {
+		return ParseKeys(r.buf[:n]), nil
 	}
+
+	return nil, err
 }
 
 func ParseKeys(b []byte) []Key {
@@ -79,24 +84,30 @@ func parseEscape(b []byte) (Key, int) {
 	if len(b) < 2 || (b[1] != '[' && b[1] != 'O') {
 		return Key{Kind: KeyEsc}, 1
 	}
+
 	for i := 2; i < len(b); i++ {
-		if b[i] < 0x40 || b[i] > 0x7e {
-			continue
+		if b[i] >= 0x40 && b[i] <= 0x7e {
+			return Key{Kind: escapeKind(b, i)}, i + 1
 		}
-		kind := KeyOther
-		if i == 2 {
-			switch b[i] {
-			case 'A':
-				kind = KeyUp
-			case 'B':
-				kind = KeyDown
-			case 'C':
-				kind = KeyRight
-			case 'D':
-				kind = KeyLeft
-			}
-		}
-		return Key{Kind: kind}, i + 1
 	}
 	return Key{Kind: KeyOther}, len(b)
+}
+
+func escapeKind(b []byte, end int) KeyKind {
+	if end != 2 {
+		return KeyOther
+	}
+
+	switch b[end] {
+	case 'A':
+		return KeyUp
+	case 'B':
+		return KeyDown
+	case 'C':
+		return KeyRight
+	case 'D':
+		return KeyLeft
+	default:
+		return KeyOther
+	}
 }

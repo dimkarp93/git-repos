@@ -113,48 +113,59 @@ func ExpandPath(p string) string {
 	return os.ExpandEnv(p)
 }
 
+type parser struct {
+	r       raw
+	current string
+}
+
 func parse(text string) (raw, error) {
-	r := raw{scalars: map[string]string{}, lists: map[string][]string{}}
+	p := &parser{r: raw{scalars: map[string]string{}, lists: map[string][]string{}}}
 	scanner := bufio.NewScanner(strings.NewReader(text))
-	current := ""
 	for scanner.Scan() {
-		line := stripComment(scanner.Text())
-		if strings.TrimSpace(line) == "" {
-			continue
+		if trimmed := strings.TrimSpace(stripComment(scanner.Text())); trimmed != "" {
+			p.line(trimmed)
 		}
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "- ") || trimmed == "-" {
-			if current == "" {
-				continue
-			}
-			item := unquote(strings.TrimSpace(strings.TrimPrefix(trimmed, "-")))
-			if item != "" {
-				r.lists[current] = append(r.lists[current], item)
-			}
-			continue
-		}
-		key, value, found := strings.Cut(trimmed, ":")
-		if !found {
-			continue
-		}
-		key = strings.TrimSpace(key)
-		value = unquote(strings.TrimSpace(value))
-		if key == "" {
-			continue
-		}
-		if value == "" {
-			current = key
-			r.lists[key] = nil
-			continue
-		}
-		current = ""
-		if inline, ok := parseInlineList(value); ok {
-			r.lists[key] = inline
-			continue
-		}
-		r.scalars[key] = value
 	}
-	return r, scanner.Err()
+	return p.r, scanner.Err()
+}
+
+func (p *parser) line(trimmed string) {
+	if strings.HasPrefix(trimmed, "- ") || trimmed == "-" {
+		p.listItem(trimmed)
+		return
+	}
+
+	key, value, found := strings.Cut(trimmed, ":")
+	key = strings.TrimSpace(key)
+	if !found || key == "" {
+		return
+	}
+	p.keyValue(key, unquote(strings.TrimSpace(value)))
+}
+
+func (p *parser) listItem(trimmed string) {
+	if p.current == "" {
+		return
+	}
+
+	if item := unquote(strings.TrimSpace(strings.TrimPrefix(trimmed, "-"))); item != "" {
+		p.r.lists[p.current] = append(p.r.lists[p.current], item)
+	}
+}
+
+func (p *parser) keyValue(key, value string) {
+	if value == "" {
+		p.current = key
+		p.r.lists[key] = nil
+		return
+	}
+
+	p.current = ""
+	if inline, ok := parseInlineList(value); ok {
+		p.r.lists[key] = inline
+		return
+	}
+	p.r.scalars[key] = value
 }
 
 func parseInlineList(value string) ([]string, bool) {

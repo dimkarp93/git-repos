@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/dimkarp93/git-repos/internal/gitcmd"
 )
 
@@ -36,9 +38,7 @@ func TestBlockingWorktrees(t *testing.T) {
 			if len(got) == 0 && len(tc.want) == 0 {
 				return
 			}
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Errorf("blockingWorktrees = %+v, want %+v", got, tc.want)
-			}
+			assert.True(t, reflect.DeepEqual(got, tc.want), "blockingWorktrees = %+v, want %+v", got, tc.want)
 		})
 	}
 }

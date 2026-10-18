@@ -5,6 +5,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAgeColorThresholds(t *testing.T) {
@@ -23,21 +26,20 @@ func TestAgeColorThresholds(t *testing.T) {
 		{100 * day, Red},
 	}
 	for _, tc := range cases {
-		if got := AgeColor(tc.d); got != tc.want {
-			t.Errorf("AgeColor(%s) = %q, want %q", tc.d, got, tc.want)
-		}
+		assert.Equal(t, tc.want, AgeColor(tc.d))
 	}
 }
 
 func TestFetchAgeNever(t *testing.T) {
 	text, color := FetchAge(time.Time{}, false)
-	if text != "never" || color != Red {
-		t.Fatalf("FetchAge = %q, %q", text, color)
-	}
-	text, _ = FetchAge(time.Now().Add(-50*time.Hour), true)
-	if text != "2d ago" {
-		t.Fatalf("FetchAge = %q", text)
-	}
+
+	assert.Equal(t, []string{"never", Red}, []string{text, color})
+}
+
+func TestFetchAgeKnown(t *testing.T) {
+	text, _ := FetchAge(time.Now().Add(-50*time.Hour), true)
+
+	assert.Equal(t, "2d ago", text)
 }
 
 func TestTableAlignsColumnsWithoutColor(t *testing.T) {
@@ -47,26 +49,21 @@ func TestTableAlignsColumnsWithoutColor(t *testing.T) {
 		{{Text: "long-value"}, {Text: "x"}},
 		{{Text: "s"}, {Text: "y"}},
 	})
-	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-	if len(lines) != 6 {
-		t.Fatalf("lines = %q", lines)
+
+	want := []string{
+		"┌────────────┬───┐",
+		"│ A          │ B │",
+		"├────────────┼───┤",
+		"│ long-value │ x │",
+		"│ s          │ y │",
+		"└────────────┴───┘",
 	}
-	if lines[0] != "┌────────────┬───┐" || lines[1] != "│ A          │ B │" {
-		t.Fatalf("lines = %q", lines)
-	}
-	if lines[3] != "│ long-value │ x │" || lines[4] != "│ s          │ y │" {
-		t.Fatalf("lines = %q", lines)
-	}
-	if lines[5] != "└────────────┴───┘" {
-		t.Fatalf("lines = %q", lines)
-	}
+	assert.Equal(t, want, strings.Split(strings.TrimRight(buf.String(), "\n"), "\n"))
 }
 
 func TestTableColorsCells(t *testing.T) {
 	var buf bytes.Buffer
 	p := NewPrinter(&buf, true)
 	p.Table("T", []string{"A"}, [][]Cell{{{Text: "bad", Color: Red}}})
-	if !strings.Contains(buf.String(), Red+"bad"+Reset) {
-		t.Fatalf("output = %q", buf.String())
-	}
+	require.Contains(t, buf.String(), Red+"bad"+Reset, "output = %q", buf.String())
 }

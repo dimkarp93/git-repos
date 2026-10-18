@@ -112,33 +112,42 @@ func (p *progress) paint(color, text string) string {
 func (p *progress) label() string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
 	parts := make([]string, 0, 5)
-	head := ""
-	if p.plan > 0 && p.index > 0 {
-		head = fmt.Sprintf("phase %d/%d · ", p.index, p.plan)
-	}
-	if p.phase != "" {
-		head += p.phase
-	}
-	if head != "" {
-		parts = append(parts, p.paint(render.Bold, strings.TrimSuffix(head, " · ")))
+	if head := p.head(); head != "" {
+		parts = append(parts, p.paint(render.Bold, head))
 	}
 	if p.item != "" {
 		parts = append(parts, p.paint(render.Grey, render.Ellipsis(p.item, maxProgressItemWidth)))
 	}
-	switch {
-	case p.total > 0:
-		done := min(p.done, p.total)
-		counts := fmt.Sprintf("%d of %d", done, p.total)
-		if p.unit != "" {
-			counts += " " + p.unit
-		}
-		parts = append(parts, p.paint(render.Green, fmt.Sprintf("%d%% (%s)", done*100/p.total, counts)))
-	case p.found > 0:
-		parts = append(parts, p.paint(render.Green, fmt.Sprintf("found — %d", p.found)))
+	if counts := p.counts(); counts != "" {
+		parts = append(parts, p.paint(render.Green, counts))
 	}
 	if p.active > 1 {
 		parts = append(parts, p.paint(render.Grey, fmt.Sprintf("in flight — %d", p.active)))
 	}
 	return strings.Join(parts, " · ")
+}
+
+func (p *progress) head() string {
+	switch {
+	case p.plan > 0 && p.index > 0 && p.phase != "":
+		return fmt.Sprintf("phase %d/%d · %s", p.index, p.plan, p.phase)
+	case p.plan > 0 && p.index > 0:
+		return fmt.Sprintf("phase %d/%d", p.index, p.plan)
+	default:
+		return p.phase
+	}
+}
+
+func (p *progress) counts() string {
+	switch {
+	case p.total > 0:
+		done := min(p.done, p.total)
+		return fmt.Sprintf("%d%% (%s)", done*100/p.total, strings.TrimSpace(fmt.Sprintf("%d of %d %s", done, p.total, p.unit)))
+	case p.found > 0:
+		return fmt.Sprintf("found — %d", p.found)
+	default:
+		return ""
+	}
 }

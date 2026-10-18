@@ -8,6 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/dimkarp93/git-repos/internal/provider"
 )
 
@@ -32,64 +35,90 @@ func localFact(path string, commits []string, roots []string, blobs map[string]s
 	return f
 }
 
+type evView struct {
+	Root        string
+	Shared      []string
+	RemoteAhead int
+	SameName    bool
+	SameFiles   int
+	TotalFiles  int
+}
+
+func viewEvidence(ev evidence) evView {
+	v := evView{RemoteAhead: ev.remoteAhead, SameName: ev.sameName, SameFiles: ev.sameFiles, TotalFiles: ev.totalFiles}
+	if ev.sharedRoot != nil {
+		v.Root = ev.sharedRoot.SHA
+	}
+	for _, c := range ev.shared {
+		v.Shared = append(v.Shared, c.SHA)
+	}
+	return v
+}
+
 func TestScoreMatchSharedHistory(t *testing.T) {
 	local := localFact("/w/tool", []string{"c1", "c2", "c3", "l4"}, []string{"c1"}, nil)
-	remote := remoteFact("tool-cli", []string{"r5", "c3", "c2", "c1"}, "c1")
-	ev := scoreMatch(local, remote)
-	if ev.sharedRoot == nil || ev.sharedRoot.SHA != "c1" {
-		t.Fatalf("sharedRoot = %+v", ev.sharedRoot)
-	}
-	if len(ev.shared) != 3 || ev.shared[0].SHA != "c3" || ev.remoteAhead != 1 {
-		t.Fatalf("shared = %+v, remoteAhead = %d", ev.shared, ev.remoteAhead)
-	}
-	if ev.sameName || !ev.matches(0.5) {
-		t.Fatalf("ev = %+v", ev)
-	}
+	ev := scoreMatch(local, remoteFact("tool-cli", []string{"r5", "c3", "c2", "c1"}, "c1"))
+
+	t.Run("evidence", func(t *testing.T) {
+		assert.Equal(t, evView{Root: "c1", Shared: []string{"c3", "c2", "c1"}, RemoteAhead: 1}, viewEvidence(ev))
+	})
+	t.Run("matches", func(t *testing.T) {
+		assert.True(t, ev.matches(0.5))
+	})
 }
 
 func TestScoreMatchSharedCommitsWithoutRoot(t *testing.T) {
 	local := localFact("/w/tool", []string{"c7", "c8"}, []string{"x0"}, nil)
 	remote := remoteFact("tool", []string{"c8", "c7"}, "r0")
 	remote.history.Total = 300
+
 	ev := scoreMatch(local, remote)
-	if ev.sharedRoot != nil || len(ev.shared) != 2 || ev.remoteAhead != 0 || !ev.sameName {
-		t.Fatalf("ev = %+v", ev)
-	}
+
+	assert.Equal(t, evView{Shared: []string{"c8", "c7"}, SameName: true}, viewEvidence(ev))
 }
 
-func TestScoreMatchFilesOnly(t *testing.T) {
+func filesOnlyEvidence() evidence {
 	blobs := map[string]string{"go.mod": "b1", "main.go": "b2", "a/x.go": "b3", "local.txt": "b4"}
 	local := localFact("/w/tool", []string{"l1"}, []string{"l1"}, blobs)
 	remote := remoteFact("tool", []string{"r1"}, "r1")
 	remote.tree = []provider.TreeEntry{{Path: "go.mod", SHA: "b1"}, {Path: "main.go", SHA: "b2"}, {Path: "a/x.go", SHA: "b3"}, {Path: "other.go", SHA: "b9"}}
-	ev := scoreMatch(local, remote)
-	if ev.byHistory() || ev.sameFiles != 3 || ev.totalFiles != 5 {
-		t.Fatalf("ev = %+v", ev)
-	}
-	if !ev.matches(0.6) || ev.matches(0.7) {
-		t.Fatalf("similarity = %v", ev.similarity)
-	}
-	if strings.Join(ev.samplePaths, ",") != "go.mod,main.go,a/x.go" {
-		t.Fatalf("samplePaths = %v", ev.samplePaths)
-	}
+	return scoreMatch(local, remote)
+}
+
+func TestScoreMatchFilesOnly(t *testing.T) {
+	ev := filesOnlyEvidence()
+
+	t.Run("counts", func(t *testing.T) {
+		assert.Equal(t, evView{RemoteAhead: -1, SameName: true, SameFiles: 3, TotalFiles: 5}, viewEvidence(ev))
+	})
+	t.Run("threshold", func(t *testing.T) {
+		assert.Equal(t, []bool{true, false}, []bool{ev.matches(0.6), ev.matches(0.7)})
+	})
+	t.Run("sample paths", func(t *testing.T) {
+		assert.Equal(t, []string{"go.mod", "main.go", "a/x.go"}, ev.samplePaths)
+	})
 }
 
 func TestScoreMatchNothingInCommon(t *testing.T) {
 	local := localFact("/w/tool", []string{"l1"}, []string{"l1"}, map[string]string{"a": "b1"})
 	remote := remoteFact("tool", []string{"r1"}, "r1")
 	remote.tree = []provider.TreeEntry{{Path: "a", SHA: "b2"}}
-	if ev := scoreMatch(local, remote); ev.matches(0.01) {
-		t.Fatalf("ev = %+v", ev)
-	}
+
+	assert.False(t, scoreMatch(local, remote).matches(0.01))
 }
 
-func TestRenderEvidence(t *testing.T) {
+func historyEvidenceText() string {
 	remote := remoteFact("tool", []string{"r5", "c3", "c2", "c1", "c0"}, "c0")
 	remote.history.Root.Date = time.Date(2024, 3, 1, 12, 0, 0, 0, time.UTC)
 	local := localFact("/w/tool", []string{"c0", "c1", "c2", "c3"}, []string{"c0"}, nil)
 	ev := scoreMatch(local, remote)
 	ev.localAhead, ev.aheadKnown = 2, true
-	text := evidenceText(ev)
+	return evidenceText(ev)
+}
+
+func TestRenderEvidenceForSharedHistory(t *testing.T) {
+	text := historyEvidenceText()
+
 	for _, want := range []string{
 		"✓ same first commit     c0  2024-03-01  init",
 		"✓ 4 of 5 remote commits are in the local history",
@@ -98,22 +127,35 @@ func TestRenderEvidence(t *testing.T) {
 		"→ diverged: local has 2 commits more, remote has 1 commit more",
 		"why: an identical commit SHA",
 	} {
-		if !strings.Contains(text, want) {
-			t.Errorf("missing %q in:\n%s", want, text)
-		}
+		t.Run(want, func(t *testing.T) {
+			assert.Contains(t, text, want)
+		})
 	}
+}
 
-	remote.history.Recent = remote.history.Recent[:1]
+func TestRenderEvidenceForRootOnly(t *testing.T) {
+	remote := remoteFact("tool", []string{"r5"}, "c0")
 	remote.history.Total = 250
-	text = evidenceText(scoreMatch(local, remote))
-	if !strings.Contains(text, "none of the latest 1 remote commits") || !strings.Contains(text, "same start") {
-		t.Errorf("root only:\n%s", text)
-	}
+	local := localFact("/w/tool", []string{"c0"}, []string{"c0"}, nil)
 
-	files := evidence{remote: remote, sameFiles: 8, totalFiles: 10, similarity: 0.8, samplePaths: []string{"go.mod"}}
-	text = evidenceText(files)
-	if !strings.Contains(text, "≈ 80% identical files (8 of 10)") || !strings.Contains(text, "same content: go.mod") {
-		t.Errorf("files:\n%s", text)
+	text := evidenceText(scoreMatch(local, remote))
+
+	for _, want := range []string{"none of the latest 1 remote commits", "same start"} {
+		t.Run(want, func(t *testing.T) {
+			assert.Contains(t, text, want)
+		})
+	}
+}
+
+func TestRenderEvidenceForFiles(t *testing.T) {
+	ev := evidence{remote: remoteFact("tool", nil, ""), sameFiles: 8, totalFiles: 10, similarity: 0.8, samplePaths: []string{"go.mod"}}
+
+	text := evidenceText(ev)
+
+	for _, want := range []string{"≈ 80% identical files (8 of 10)", "same content: go.mod"} {
+		t.Run(want, func(t *testing.T) {
+			assert.Contains(t, text, want)
+		})
 	}
 }
 
@@ -135,42 +177,52 @@ func TestSharedSummary(t *testing.T) {
 		{40, 100, 512, "40 of the latest 100 remote commits (of 512) are in the local history"},
 	}
 	for _, tc := range cases {
-		if got := sharedSummary(tc.shared, tc.recent, tc.total); got != tc.want {
-			t.Errorf("sharedSummary(%d, %d, %d) = %q", tc.shared, tc.recent, tc.total, got)
-		}
+		t.Run(tc.want, func(t *testing.T) {
+			assert.Equal(t, tc.want, sharedSummary(tc.shared, tc.recent, tc.total))
+		})
 	}
 }
 
 func TestAutoPick(t *testing.T) {
 	root := &provider.Commit{SHA: "r"}
-	one := []evidence{{}}
-	if _, ok := autoPick(one); !ok {
-		t.Error("single candidate not picked")
+	cases := map[string]struct {
+		found []evidence
+		want  bool
+	}{
+		"single candidate":       {found: []evidence{{}}, want: true},
+		"only one shared root":   {found: []evidence{{sharedRoot: root}, {}}, want: true},
+		"two shared roots":       {found: []evidence{{sharedRoot: root}, {sharedRoot: root}}},
+		"ambiguous file matches": {found: []evidence{{similarity: 0.9}, {similarity: 0.8}}},
 	}
-	if _, ok := autoPick([]evidence{{sharedRoot: root}, {}}); !ok {
-		t.Error("the only candidate with a shared root not picked")
-	}
-	if _, ok := autoPick([]evidence{{sharedRoot: root}, {sharedRoot: root}}); ok {
-		t.Error("ambiguous candidates picked")
-	}
-	if _, ok := autoPick([]evidence{{similarity: 0.9}, {similarity: 0.8}}); ok {
-		t.Error("ambiguous file matches picked")
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, ok := autoPick(tc.found)
+			assert.Equal(t, tc.want, ok)
+		})
 	}
 }
 
 func TestRankEvidence(t *testing.T) {
 	root := &provider.Commit{SHA: "r"}
-	mk := func(name string) *remoteFacts { return remoteFact(name, nil, "") }
 	found := []evidence{
-		{remote: mk("files"), similarity: 0.9},
-		{remote: mk("many"), shared: make([]provider.Commit, 5)},
-		{remote: mk("root"), sharedRoot: root, shared: make([]provider.Commit, 1)},
+		{remote: remoteFact("files", nil, ""), similarity: 0.9},
+		{remote: remoteFact("many", nil, ""), shared: make([]provider.Commit, 5)},
+		{remote: remoteFact("root", nil, ""), sharedRoot: root, shared: make([]provider.Commit, 1)},
 	}
+
 	rankEvidence(found)
+
 	got := []string{found[0].remote.item.repo.Name, found[1].remote.item.repo.Name, found[2].remote.item.repo.Name}
-	if strings.Join(got, ",") != "root,many,files" {
-		t.Fatalf("order = %v", got)
-	}
+	assert.Equal(t, []string{"root", "many", "files"}, got)
+}
+
+func TestCommitDate(t *testing.T) {
+	t.Run("unknown", func(t *testing.T) {
+		assert.Equal(t, "          ", commitDate(provider.Commit{}))
+	})
+	t.Run("known", func(t *testing.T) {
+		assert.Equal(t, "2024-03-01", commitDate(provider.Commit{Date: time.Date(2024, 3, 1, 12, 0, 0, 0, time.Local)}))
+	})
 }
 
 type fixFixture struct {
@@ -185,9 +237,7 @@ func newFixFixture(t *testing.T, remoteName string) *fixFixture {
 	t.Helper()
 	root := t.TempDir()
 	upstream := filepath.Join(t.TempDir(), "upstream")
-	if err := os.MkdirAll(upstream, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(upstream, 0o755))
 	git(t, upstream, "init", "--initial-branch=main", "--quiet")
 	commit(t, upstream, "a.txt")
 	commit(t, upstream, "b.txt")
@@ -223,7 +273,7 @@ func (f *fixFixture) localCopy(t *testing.T, name string) string {
 	return dir
 }
 
-func (f *fixFixture) run(t *testing.T, input string, opts options) (string, int, int, int) {
+func (f *fixFixture) run(t *testing.T, input string, opts options) string {
 	t.Helper()
 	var out bytes.Buffer
 	s := newSession(t, f.prov, []string{f.root}, &out)
@@ -235,190 +285,200 @@ func (f *fixFixture) run(t *testing.T, input string, opts options) (string, int,
 	}
 	s.opts = opts
 	_, inv, err := collect(s.ctx, s.prov, s.store, s.cfg, s.roots, opts, s.pr)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	matches := s.findMatches(s.localFacts(inv.localOnly, inv.remotes, opts), s.remoteFacts(inv.remoteOnly, opts), opts)
 	c := newScriptedConfirmer(strings.NewReader(input), &out, opts.assumeYes)
 	st := s.linkMatches(matches, c, opts)
 	if !st.stopped {
 		s.guard, err = newGuard(s.ctx, append(append([]matched{}, inv.pairs...), st.linkedPairs...))
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		s.syncNames(append(st.linkedPairs, differentNames(inv.pairs)...), inv.remotes, c, opts, &st)
 	}
 	f.last = st
-	return out.String(), st.linked, st.skipped, st.failed
+	return out.String()
+}
+
+type fixCounts struct {
+	linked, skipped, failed, renamed int
+}
+
+func (f *fixFixture) counts() fixCounts {
+	return fixCounts{linked: f.last.linked, skipped: f.last.skipped, failed: f.last.failed, renamed: f.last.renamed}
 }
 
 func TestFixAddsOriginWhenMissing(t *testing.T) {
 	f := newFixFixture(t, "tool-cli")
 	dir := f.localCopy(t, "tool")
+	out := f.run(t, "1\n", options{})
 
-	out, linked, _, failed := f.run(t, "1\n", options{})
-	if linked != 1 || failed != 0 {
-		t.Fatalf("linked = %d, failed = %d\n%s", linked, failed, out)
-	}
-	if got := git(t, dir, "remote", "get-url", "origin"); got != f.repo.CloneURL {
-		t.Fatalf("origin = %q", got)
-	}
-	if got := git(t, dir, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); got != "origin/main" {
-		t.Fatalf("origin/HEAD = %q", got)
-	}
+	t.Run("counts", func(t *testing.T) {
+		assert.Equal(t, fixCounts{linked: 1}, f.counts())
+	})
+	t.Run("origin", func(t *testing.T) {
+		assert.Equal(t, f.repo.CloneURL, git(t, dir, "remote", "get-url", "origin"))
+	})
+	t.Run("origin head", func(t *testing.T) {
+		assert.Equal(t, "origin/main", git(t, dir, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"))
+	})
 	for _, want := range []string{"tester/tool-cli", "(name differs)", "✓ same first commit", "all 2 remote commits are in the local history", "local is 1 commit ahead"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("output lacks %q:\n%s", want, out)
-		}
+		t.Run(want, func(t *testing.T) {
+			assert.Contains(t, out, want)
+		})
 	}
+}
+
+func fixWithOrigin(t *testing.T, local, origin string, extra ...[2]string) (*fixFixture, string) {
+	t.Helper()
+
+	f := newFixFixture(t, "tool")
+	dir := f.localCopy(t, local)
+	git(t, dir, "remote", "add", "origin", origin)
+	for _, r := range extra {
+		git(t, dir, "remote", "add", r[0], r[1])
+	}
+	return f, dir
 }
 
 func TestFixExistingRemoteNameRenamed(t *testing.T) {
-	f := newFixFixture(t, "tool")
-	dir := f.localCopy(t, "tool")
-	git(t, dir, "remote", "add", "origin", "https://gitlab.example/x/tool.git")
-	git(t, dir, "remote", "add", "fake", "https://gitlab.example/x/mirror.git")
+	f, dir := fixWithOrigin(t, "tool", "https://gitlab.example/x/tool.git", [2]string{"fake", "https://gitlab.example/x/mirror.git"})
+	out := f.run(t, "1\n\nr\nmine\n", options{})
 
-	out, linked, _, failed := f.run(t, "1\n\nr\nmine\n", options{})
-	if linked != 1 || failed != 0 {
-		t.Fatalf("linked = %d, failed = %d\n%s", linked, failed, out)
+	t.Run("counts", func(t *testing.T) {
+		assert.Equal(t, fixCounts{linked: 1}, f.counts())
+	})
+	for _, want := range []string{"remote fake already exists (https://gitlab.example/x/mirror.git)", "[overwrite | rename]"} {
+		t.Run(want, func(t *testing.T) {
+			assert.Contains(t, out, want)
+		})
 	}
-	if !strings.Contains(out, "remote fake already exists (https://gitlab.example/x/mirror.git)") || !strings.Contains(out, "[overwrite | rename]") {
-		t.Errorf("no overwrite question:\n%s", out)
-	}
-	if got := git(t, dir, "remote", "get-url", "mine"); got != f.repo.CloneURL {
-		t.Fatalf("mine = %q", got)
-	}
-	if got := git(t, dir, "remote", "get-url", "fake"); got != "https://gitlab.example/x/mirror.git" {
-		t.Fatalf("fake changed to %q", got)
-	}
+	t.Run("new remote", func(t *testing.T) {
+		assert.Equal(t, f.repo.CloneURL, git(t, dir, "remote", "get-url", "mine"))
+	})
+	t.Run("existing remote kept", func(t *testing.T) {
+		assert.Equal(t, "https://gitlab.example/x/mirror.git", git(t, dir, "remote", "get-url", "fake"))
+	})
 }
 
 func TestFixExistingRemoteNameOverwritten(t *testing.T) {
-	f := newFixFixture(t, "tool")
-	dir := f.localCopy(t, "tool")
-	git(t, dir, "remote", "add", "origin", "https://gitlab.example/x/tool.git")
+	f, dir := fixWithOrigin(t, "tool", "https://gitlab.example/x/tool.git")
+	out := f.run(t, "1\norigin\noverwrite\n", options{})
 
-	out, linked, _, failed := f.run(t, "1\norigin\noverwrite\n", options{})
-	if linked != 1 || failed != 0 {
-		t.Fatalf("linked = %d, failed = %d\n%s", linked, failed, out)
-	}
-	if got := git(t, dir, "remote", "get-url", "origin"); got != f.repo.CloneURL {
-		t.Fatalf("origin = %q", got)
-	}
-	if !strings.Contains(out, "remote origin overwritten") {
-		t.Errorf("output:\n%s", out)
-	}
+	t.Run("counts", func(t *testing.T) {
+		assert.Equal(t, fixCounts{linked: 1}, f.counts())
+	})
+	t.Run("origin", func(t *testing.T) {
+		assert.Equal(t, f.repo.CloneURL, git(t, dir, "remote", "get-url", "origin"))
+	})
+	t.Run("reported", func(t *testing.T) {
+		assert.Contains(t, out, "remote origin overwritten")
+	})
 }
 
 func TestFixExistingRemoteNameWithYesFails(t *testing.T) {
-	f := newFixFixture(t, "tool")
-	dir := f.localCopy(t, "tool")
-	git(t, dir, "remote", "add", "origin", "https://gitlab.example/x/tool.git")
-	git(t, dir, "remote", "add", "fake", "https://gitlab.example/x/mirror.git")
+	f, _ := fixWithOrigin(t, "tool", "https://gitlab.example/x/tool.git", [2]string{"fake", "https://gitlab.example/x/mirror.git"})
+	out := f.run(t, "", options{assumeYes: true})
 
-	out, linked, _, failed := f.run(t, "", options{assumeYes: true})
-	if linked != 0 || failed != 1 || !strings.Contains(out, "run without --yes to overwrite") {
-		t.Fatalf("linked = %d, failed = %d\n%s", linked, failed, out)
-	}
+	t.Run("counts", func(t *testing.T) {
+		assert.Equal(t, fixCounts{failed: 1}, f.counts())
+	})
+	t.Run("hint", func(t *testing.T) {
+		assert.Contains(t, out, "run without --yes to overwrite")
+	})
 }
 
-func TestFixRemovesDeadOrigin(t *testing.T) {
-	f := newFixFixture(t, "tool")
-	dir := f.localCopy(t, "tool-cli")
-	git(t, dir, "remote", "add", "origin", "https://fake.test/tester/tool-cli.git")
+const deadOrigin = "https://fake.test/tester/tool-cli.git"
 
-	out, linked, _, failed := f.run(t, "1\nremove\n", options{})
-	if linked != 1 || failed != 0 {
-		t.Fatalf("linked = %d, failed = %d\n%s", linked, failed, out)
-	}
-	if !strings.Contains(out, "remote origin → https://fake.test/tester/tool-cli.git: tester/tool-cli does not exist on fake") {
-		t.Errorf("no dead remote question:\n%s", out)
-	}
-	if strings.Contains(out, "Name of the new remote") {
-		t.Errorf("name asked although origin was freed:\n%s", out)
-	}
-	if got := git(t, dir, "remote"); got != "origin" {
-		t.Fatalf("remotes = %q", got)
-	}
-	if got := git(t, dir, "remote", "get-url", "origin"); got != f.repo.CloneURL {
-		t.Fatalf("origin = %q", got)
-	}
+func TestFixRemovesDeadOrigin(t *testing.T) {
+	f, dir := fixWithOrigin(t, "tool-cli", deadOrigin)
+	out := f.run(t, "1\nremove\n", options{})
+
+	t.Run("counts", func(t *testing.T) {
+		assert.Equal(t, fixCounts{linked: 1}, f.counts())
+	})
+	t.Run("asks about the dead remote", func(t *testing.T) {
+		assert.Contains(t, out, "remote origin → "+deadOrigin+": tester/tool-cli does not exist on fake")
+	})
+	t.Run("no name question", func(t *testing.T) {
+		assert.NotContains(t, out, "Name of the new remote")
+	})
+	t.Run("origin replaced", func(t *testing.T) {
+		assert.Equal(t, []string{"origin", f.repo.CloneURL}, []string{git(t, dir, "remote"), git(t, dir, "remote", "get-url", "origin")})
+	})
 }
 
 func TestFixKeepsDeadOrigin(t *testing.T) {
-	f := newFixFixture(t, "tool")
-	dir := f.localCopy(t, "tool-cli")
-	git(t, dir, "remote", "add", "origin", "https://fake.test/tester/tool-cli.git")
+	f, dir := fixWithOrigin(t, "tool-cli", deadOrigin)
+	f.run(t, "1\nkeep\n\n", options{})
 
-	out, linked, _, _ := f.run(t, "1\nkeep\n\n", options{})
-	if linked != 1 {
-		t.Fatalf("linked = %d\n%s", linked, out)
-	}
-	if got := git(t, dir, "remote", "get-url", "origin"); got != "https://fake.test/tester/tool-cli.git" {
-		t.Fatalf("origin = %q", got)
-	}
-	if got := git(t, dir, "remote", "get-url", "fake"); got != f.repo.CloneURL {
-		t.Fatalf("fake = %q", got)
-	}
+	t.Run("counts", func(t *testing.T) {
+		assert.Equal(t, 1, f.counts().linked)
+	})
+	t.Run("dead origin kept", func(t *testing.T) {
+		assert.Equal(t, deadOrigin, git(t, dir, "remote", "get-url", "origin"))
+	})
+	t.Run("provider remote added", func(t *testing.T) {
+		assert.Equal(t, f.repo.CloneURL, git(t, dir, "remote", "get-url", "fake"))
+	})
 }
 
 func TestFixYesKeepsDeadOrigin(t *testing.T) {
-	f := newFixFixture(t, "tool")
-	dir := f.localCopy(t, "tool-cli")
-	git(t, dir, "remote", "add", "origin", "https://fake.test/tester/tool-cli.git")
+	f, dir := fixWithOrigin(t, "tool-cli", deadOrigin)
+	out := f.run(t, "", options{assumeYes: true})
 
-	out, linked, _, _ := f.run(t, "", options{assumeYes: true})
-	if linked != 1 || !strings.Contains(out, "kept remote origin") {
-		t.Fatalf("linked = %d\n%s", linked, out)
-	}
-	if got := git(t, dir, "remote", "get-url", "origin"); got != "https://fake.test/tester/tool-cli.git" {
-		t.Fatalf("origin = %q", got)
-	}
+	t.Run("counts", func(t *testing.T) {
+		assert.Equal(t, 1, f.counts().linked)
+	})
+	t.Run("reported", func(t *testing.T) {
+		assert.Contains(t, out, "kept remote origin")
+	})
+	t.Run("dead origin kept", func(t *testing.T) {
+		assert.Equal(t, deadOrigin, git(t, dir, "remote", "get-url", "origin"))
+	})
 }
 
 func TestFixDefaultRemoteNameIsProvider(t *testing.T) {
-	f := newFixFixture(t, "tool")
-	dir := f.localCopy(t, "tool")
-	git(t, dir, "remote", "add", "origin", "https://gitlab.example/x/tool.git")
+	f, dir := fixWithOrigin(t, "tool", "https://gitlab.example/x/tool.git")
+	f.run(t, "1\n\n", options{})
 
-	out, linked, _, _ := f.run(t, "1\n\n", options{})
-	if linked != 1 {
-		t.Fatalf("linked = %d\n%s", linked, out)
-	}
-	if got := git(t, dir, "remote", "get-url", "fake"); got != f.repo.CloneURL {
-		t.Fatalf("fake = %q", got)
-	}
+	t.Run("counts", func(t *testing.T) {
+		assert.Equal(t, 1, f.counts().linked)
+	})
+	t.Run("named after provider", func(t *testing.T) {
+		assert.Equal(t, f.repo.CloneURL, git(t, dir, "remote", "get-url", "fake"))
+	})
 }
 
 func TestFixDryRunChangesNothing(t *testing.T) {
 	f := newFixFixture(t, "tool")
 	dir := f.localCopy(t, "tool")
+	out := f.run(t, "", options{dryRun: true})
 
-	out, linked, _, _ := f.run(t, "", options{dryRun: true})
-	if linked != 0 || !strings.Contains(out, "would add remote origin → tester/tool") {
-		t.Fatalf("linked = %d\n%s", linked, out)
-	}
-	if remotes := git(t, dir, "remote"); remotes != "" {
-		t.Fatalf("remotes = %q", remotes)
-	}
+	t.Run("counts", func(t *testing.T) {
+		assert.Equal(t, fixCounts{}, f.counts())
+	})
+	t.Run("plan", func(t *testing.T) {
+		assert.Contains(t, out, "would add remote origin → tester/tool")
+	})
+	t.Run("no remotes", func(t *testing.T) {
+		assert.Empty(t, git(t, dir, "remote"))
+	})
 }
 
 func TestFixOfferedRemoteIsNotReused(t *testing.T) {
 	f := newFixFixture(t, "tool")
 	first := f.localCopy(t, "one")
 	second := f.localCopy(t, "two")
+	out := f.run(t, "1\n", options{})
 
-	out, linked, _, _ := f.run(t, "1\n", options{})
-	if linked != 1 {
-		t.Fatalf("linked = %d\n%s", linked, out)
-	}
-	if strings.Count(out, "1) tester/tool") != 1 {
-		t.Fatalf("remote offered twice:\n%s", out)
-	}
-	if git(t, first, "remote") != "origin" || git(t, second, "remote") != "" {
-		t.Fatalf("remotes: one = %q, two = %q", git(t, first, "remote"), git(t, second, "remote"))
-	}
+	t.Run("counts", func(t *testing.T) {
+		assert.Equal(t, 1, f.counts().linked)
+	})
+	t.Run("offered once", func(t *testing.T) {
+		assert.Equal(t, 1, strings.Count(out, "1) tester/tool"))
+	})
+	t.Run("remotes", func(t *testing.T) {
+		assert.Equal(t, []string{"origin", ""}, []string{git(t, first, "remote"), git(t, second, "remote")})
+	})
 }
 
 func TestFixYesSkipsAmbiguous(t *testing.T) {
@@ -428,152 +488,181 @@ func TestFixYesSkipsAmbiguous(t *testing.T) {
 	other.Name = "tool-copy"
 	f.prov.repos = append(f.prov.repos, other)
 	f.prov.histories[other.FullName()] = f.prov.histories[f.repo.FullName()]
+	out := f.run(t, "", options{assumeYes: true})
 
-	out, linked, skipped, _ := f.run(t, "", options{assumeYes: true})
-	if linked != 0 || skipped != 1 || !strings.Contains(out, "ambiguous") {
-		t.Fatalf("linked = %d, skipped = %d\n%s", linked, skipped, out)
-	}
+	t.Run("counts", func(t *testing.T) {
+		assert.Equal(t, fixCounts{skipped: 1}, f.counts())
+	})
+	t.Run("reported", func(t *testing.T) {
+		assert.Contains(t, out, "ambiguous")
+	})
 }
 
-func TestFixMatchesByFilesWithoutHistory(t *testing.T) {
+func freshCopyFixture(t *testing.T) *fixFixture {
+	t.Helper()
+
 	f := newFixFixture(t, "tool")
 	dir := filepath.Join(f.root, "fresh")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(dir, 0o755))
 	git(t, dir, "init", "--initial-branch=main", "--quiet")
 	for _, name := range []string{"a.txt", "b.txt"} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644))
 	}
 	git(t, dir, "add", ".")
 	git(t, dir, "commit", "--quiet", "-m", "fresh start")
+
 	f.prov.trees = map[string][]provider.TreeEntry{"tester/tool": {
 		{Path: "a.txt", SHA: git(t, f.upstream, "rev-parse", "main:a.txt")},
 		{Path: "b.txt", SHA: git(t, f.upstream, "rev-parse", "main:b.txt")},
 	}}
+	return f
+}
 
-	out, linked, _, _ := f.run(t, "1\n", options{})
-	if linked != 1 || !strings.Contains(out, "≈ 100% identical files (2 of 2)") {
-		t.Fatalf("linked = %d\n%s", linked, out)
-	}
-	if len(f.prov.treeCalls) != 1 {
-		t.Fatalf("treeCalls = %v", f.prov.treeCalls)
-	}
+func TestFixMatchesByFilesWithoutHistory(t *testing.T) {
+	f := freshCopyFixture(t)
+	out := f.run(t, "1\n", options{})
+
+	t.Run("counts", func(t *testing.T) {
+		assert.Equal(t, 1, f.counts().linked)
+	})
+	t.Run("evidence", func(t *testing.T) {
+		assert.Contains(t, out, "≈ 100% identical files (2 of 2)")
+	})
+	t.Run("trees read once", func(t *testing.T) {
+		assert.Len(t, f.prov.treeCalls, 1)
+	})
 }
 
 func TestFixRenamesLocalDirToRemoteName(t *testing.T) {
 	f := newFixFixture(t, "tool")
 	dir := f.localCopy(t, "tool-cli")
+	out := f.run(t, "1\nlocal\n", options{})
 
-	out, linked, _, failed := f.run(t, "1\nlocal\n", options{})
-	if linked != 1 || failed != 0 || f.last.renamed != 1 {
-		t.Fatalf("linked = %d, failed = %d, renamed = %d\n%s", linked, failed, f.last.renamed, out)
-	}
+	t.Run("counts", func(t *testing.T) {
+		assert.Equal(t, fixCounts{linked: 1, renamed: 1}, f.counts())
+	})
 	for _, want := range []string{"Names differ:", "rename the directory", "[local | remote | keep]"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("output lacks %q:\n%s", want, out)
-		}
+		t.Run(want, func(t *testing.T) {
+			assert.Contains(t, out, want)
+		})
 	}
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
-		t.Fatalf("old dir still exists: %v", err)
-	}
-	if got := git(t, filepath.Join(f.root, "tool"), "remote", "get-url", "origin"); got != f.repo.CloneURL {
-		t.Fatalf("origin = %q", got)
-	}
+	t.Run("old dir gone", func(t *testing.T) {
+		assert.NoDirExists(t, dir)
+	})
+	t.Run("renamed dir linked", func(t *testing.T) {
+		assert.Equal(t, f.repo.CloneURL, git(t, filepath.Join(f.root, "tool"), "remote", "get-url", "origin"))
+	})
 }
 
 func TestFixRenamesRemoteToLocalName(t *testing.T) {
 	f := newFixFixture(t, "tool")
 	dir := f.localCopy(t, "tool-cli")
+	out := f.run(t, "1\nremote\n", options{})
 
-	out, _, _, failed := f.run(t, "1\nremote\n", options{})
-	if failed != 0 || f.last.renamed != 1 {
-		t.Fatalf("failed = %d, renamed = %d\n%s", failed, f.last.renamed, out)
-	}
-	if len(f.prov.renamed) != 1 || f.prov.renamed[0] != "tester/tool->tool-cli" {
-		t.Fatalf("renamed = %v", f.prov.renamed)
-	}
-	if _, err := os.Stat(dir); err != nil {
-		t.Fatalf("local dir moved: %v", err)
-	}
-	if !strings.Contains(out, "remote origin updated") {
-		t.Errorf("output:\n%s", out)
-	}
+	t.Run("counts", func(t *testing.T) {
+		assert.Equal(t, fixCounts{linked: 1, renamed: 1}, f.counts())
+	})
+	t.Run("remote renamed", func(t *testing.T) {
+		assert.Equal(t, []string{"tester/tool->tool-cli"}, f.prov.renamed)
+	})
+	t.Run("local dir kept", func(t *testing.T) {
+		assert.DirExists(t, dir)
+	})
+	t.Run("reported", func(t *testing.T) {
+		assert.Contains(t, out, "remote origin updated")
+	})
 }
 
 func TestFixSkipsRenameForRepositoryWithWorktree(t *testing.T) {
 	f := newFixFixture(t, "tool")
 	dir := f.localCopy(t, "tool-cli")
 	git(t, dir, "worktree", "add", "-b", "feature", filepath.Join(t.TempDir(), "feature"))
+	out := f.run(t, "1\nlocal\n", options{})
 
-	out, linked, _, failed := f.run(t, "1\nlocal\n", options{})
-	if linked != 1 || failed != 0 || f.last.renamed != 0 || len(f.last.blocked) != 1 {
-		t.Fatalf("linked = %d, failed = %d, renamed = %d, blocked = %+v\n%s", linked, failed, f.last.renamed, f.last.blocked, out)
-	}
-	if strings.Contains(out, "rename the directory") {
-		t.Errorf("the rename was offered:\n%s", out)
-	}
-	if _, err := os.Stat(dir); err != nil {
-		t.Fatalf("directory was touched: %v", err)
-	}
+	t.Run("counts", func(t *testing.T) {
+		assert.Equal(t, fixCounts{linked: 1, skipped: 1}, f.counts())
+	})
+	t.Run("blocked", func(t *testing.T) {
+		assert.Len(t, f.last.blocked, 1)
+	})
+	t.Run("rename not offered", func(t *testing.T) {
+		assert.NotContains(t, out, "rename the directory")
+	})
+	t.Run("directory kept", func(t *testing.T) {
+		assert.DirExists(t, dir)
+	})
+}
+
+func conflictingNamesFixture(t *testing.T) (*fixFixture, string) {
+	t.Helper()
+
+	f := newFixFixture(t, "tool")
+	dir := f.localCopy(t, "tool-cli")
+	require.NoError(t, os.MkdirAll(filepath.Join(f.root, "tool"), 0o755))
+	f.prov.repos = append(f.prov.repos, provider.Repo{Owner: "tester", Name: "tool-cli"})
+
+	return f, dir
 }
 
 func TestFixRenameConflictAsksAgain(t *testing.T) {
-	f := newFixFixture(t, "tool")
-	dir := f.localCopy(t, "tool-cli")
-	if err := os.MkdirAll(filepath.Join(f.root, "tool"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	f.prov.repos = append(f.prov.repos, provider.Repo{Owner: "tester", Name: "tool-cli"})
+	f, dir := conflictingNamesFixture(t)
+	out := f.run(t, "1\nlocal\nremote\nkeep\n", options{})
 
-	out, _, skipped, failed := f.run(t, "1\nlocal\nremote\nkeep\n", options{})
-	if failed != 0 || skipped != 1 || f.last.renamed != 0 {
-		t.Fatalf("failed = %d, skipped = %d, renamed = %d\n%s", failed, skipped, f.last.renamed, out)
+	t.Run("counts", func(t *testing.T) {
+		assert.Equal(t, fixCounts{linked: 1, skipped: 1}, f.counts())
+	})
+	t.Run("asked again", func(t *testing.T) {
+		assert.Equal(t, 3, strings.Count(out, "Rename which one?"))
+	})
+	for _, want := range []string{"already exists, pick another option", "tester/tool-cli already exists on fake"} {
+		t.Run(want, func(t *testing.T) {
+			assert.Contains(t, out, want)
+		})
 	}
-	if strings.Count(out, "Rename which one?") != 3 {
-		t.Errorf("not asked again:\n%s", out)
-	}
-	if !strings.Contains(out, "already exists, pick another option") || !strings.Contains(out, "tester/tool-cli already exists on fake") {
-		t.Errorf("no conflict message:\n%s", out)
-	}
-	if _, err := os.Stat(dir); err != nil {
-		t.Fatalf("local dir moved: %v", err)
-	}
+	t.Run("local dir kept", func(t *testing.T) {
+		assert.DirExists(t, dir)
+	})
 }
 
 func TestFixOffersRenameForLinkedPair(t *testing.T) {
-	f := newFixFixture(t, "tool")
-	dir := f.localCopy(t, "old-name")
-	git(t, dir, "remote", "add", "origin", "https://fake.test/tester/tool.git")
+	f, _ := fixWithOrigin(t, "old-name", "https://fake.test/tester/tool.git")
+	f.run(t, "local\n", options{})
 
-	out, linked, _, _ := f.run(t, "local\n", options{})
-	if linked != 0 || f.last.renamed != 1 {
-		t.Fatalf("linked = %d, renamed = %d\n%s", linked, f.last.renamed, out)
-	}
-	if _, err := os.Stat(filepath.Join(f.root, "tool")); err != nil {
-		t.Fatalf("dir not renamed: %v\n%s", err, out)
-	}
+	t.Run("counts", func(t *testing.T) {
+		assert.Equal(t, fixCounts{renamed: 1}, f.counts())
+	})
+	t.Run("renamed dir", func(t *testing.T) {
+		assert.DirExists(t, filepath.Join(f.root, "tool"))
+	})
 }
 
-func TestFixNamesDifferYesAndDryRun(t *testing.T) {
-	f := newFixFixture(t, "tool")
-	dir := f.localCopy(t, "old-name")
-	git(t, dir, "remote", "add", "origin", "https://fake.test/tester/tool.git")
+func TestFixNamesDifferWithYes(t *testing.T) {
+	f, dir := fixWithOrigin(t, "old-name", "https://fake.test/tester/tool.git")
+	out := f.run(t, "", options{assumeYes: true})
 
-	out, _, skipped, _ := f.run(t, "", options{assumeYes: true})
-	if skipped != 1 || !strings.Contains(out, "run without --yes to choose") {
-		t.Fatalf("skipped = %d\n%s", skipped, out)
-	}
-	out, _, _, _ = f.run(t, "", options{dryRun: true})
-	if f.last.namesDiffer != 1 || !strings.Contains(out, "would ask which one to rename") {
-		t.Fatalf("namesDiffer = %d\n%s", f.last.namesDiffer, out)
-	}
-	if _, err := os.Stat(dir); err != nil {
-		t.Fatalf("dir moved: %v", err)
-	}
-	if len(f.prov.renamed) != 0 {
-		t.Fatalf("renamed = %v", f.prov.renamed)
-	}
+	t.Run("skipped", func(t *testing.T) {
+		assert.Equal(t, 1, f.counts().skipped)
+	})
+	t.Run("hint", func(t *testing.T) {
+		assert.Contains(t, out, "run without --yes to choose")
+	})
+	t.Run("dir kept", func(t *testing.T) {
+		assert.DirExists(t, dir)
+	})
+}
+
+func TestFixNamesDifferDryRun(t *testing.T) {
+	f, dir := fixWithOrigin(t, "old-name", "https://fake.test/tester/tool.git")
+	out := f.run(t, "", options{dryRun: true})
+
+	t.Run("counted", func(t *testing.T) {
+		assert.Equal(t, 1, f.last.namesDiffer)
+	})
+	t.Run("plan", func(t *testing.T) {
+		assert.Contains(t, out, "would ask which one to rename")
+	})
+	t.Run("nothing renamed", func(t *testing.T) {
+		assert.DirExists(t, dir)
+		assert.Empty(t, f.prov.renamed)
+	})
 }

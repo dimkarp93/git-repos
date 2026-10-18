@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/dimkarp93/utils/pkg/collections"
 )
 
 func run(ctx context.Context, dir string, args ...string) (string, int, error) {
@@ -328,13 +330,12 @@ func AllCommits(ctx context.Context, dir string) (map[string]bool, error) {
 	if err != nil {
 		return nil, err
 	}
-	commits := map[string]bool{}
-	for _, sha := range strings.Split(out, "\n") {
-		if sha != "" {
-			commits[sha] = true
-		}
-	}
-	return commits, nil
+	shas := collections.Filter(strings.Split(out, "\n"), isNotEmpty)
+	return collections.ToSet(shas), nil
+}
+
+func isNotEmpty(s string) bool {
+	return s != ""
 }
 
 func SetRemoteHead(ctx context.Context, dir, remote, branch string) error {

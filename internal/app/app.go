@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -18,6 +17,7 @@ import (
 	"github.com/dimkarp93/git-repos/internal/provider"
 	"github.com/dimkarp93/git-repos/internal/provider/github"
 	"github.com/dimkarp93/git-repos/internal/render"
+	"github.com/dimkarp93/utils/pkg/collections"
 )
 
 const (
@@ -95,6 +95,7 @@ func Run(args []string) int {
 		usage(os.Stderr)
 		return ExitFailure
 	}
+
 	name := args[0]
 	if name == "help" || name == "-h" || name == "--help" {
 		usage(os.Stdout)
@@ -105,11 +106,9 @@ func Run(args []string) int {
 		usage(os.Stderr)
 		return ExitFailure
 	}
-	args = args[1:]
-	for _, cmd := range commands() {
-		if cmd.name == name {
-			return cmd.run(args)
-		}
+
+	if cmd, ok := lookupCommand(name); ok {
+		return cmd.run(args[1:])
 	}
 	fmt.Fprintf(os.Stderr, "git-repos: unknown command %q\n\n", name)
 	usage(os.Stderr)
@@ -181,19 +180,18 @@ func hasFilters(fs *flag.FlagSet) bool {
 
 func printFlags(w io.Writer, fs *flag.FlagSet, want func(name string) bool) {
 	width := 0
+	fs.VisitAll(func(f *flag.Flag) { width = max(width, len(flagLabel(f))) })
+
 	fs.VisitAll(func(f *flag.Flag) {
-		if n := len(flagLabel(f)); n > width {
-			width = n
+		if want(f.Name) {
+			printFlag(w, f, width)
 		}
 	})
-	fs.VisitAll(func(f *flag.Flag) {
-		if !want(f.Name) {
-			return
-		}
-		_, usage := flag.UnquoteUsage(f)
-		label := flagLabel(f)
-		fmt.Fprintf(w, "  %-*s  %s\n", width, label, usage)
-	})
+}
+
+func printFlag(w io.Writer, f *flag.Flag, width int) {
+	_, usage := flag.UnquoteUsage(f)
+	fmt.Fprintf(w, "  %-*s  %s\n", width, flagLabel(f), usage)
 }
 
 func flagLabel(f *flag.Flag) string {
@@ -268,36 +266,14 @@ func startLocal(opts options) (*session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
-	if opts.providerID != "" {
-		cfg.Provider = opts.providerID
-	}
-	if opts.protocol != "" {
-		cfg.Protocol = opts.protocol
-	}
-	if opts.jobs < 1 {
-		opts.jobs = 1
-	}
+	cfg, opts = applyOverrides(cfg, opts)
+
 	roots, err := resolveRoots(opts.roots, cfg.Roots)
 	if err != nil {
 		return nil, err
 	}
-	if opts.clearCache {
-		if err := cache.Remove(cfg.CacheDir); err != nil {
-			fmt.Fprintf(os.Stderr, "git-repos: cache: %v\n", err)
-		}
-	}
-	store := cache.Off()
-	if !opts.noCache {
-		store, err = cache.Open(cfg.CacheDir)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "git-repos: cache: %v\n", err)
-		}
-	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	if opts.timeout > 0 {
-		ctx, cancel = context.WithTimeout(context.Background(), opts.timeout)
-	}
+	ctx, cancel := newContext(opts.timeout)
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	return &session{
 		ctx:     ctx,
@@ -306,11 +282,48 @@ func startLocal(opts options) (*session, error) {
 		cfg:     cfg,
 		opts:    opts,
 		roots:   roots,
-		store:   store,
+		store:   openStore(cfg, opts),
 		printer: newPrinter(opts),
 		pr:      &progress{color: render.ColorEnabled(opts.forceColor, opts.noColor, os.Stderr)},
 		spinner: render.NewSpinner(os.Stderr, !opts.noProgress && render.IsTerminal(os.Stderr)),
 	}, nil
+}
+
+func applyOverrides(cfg config.Config, opts options) (config.Config, options) {
+	if opts.providerID != "" {
+		cfg.Provider = opts.providerID
+	}
+	if opts.protocol != "" {
+		cfg.Protocol = opts.protocol
+	}
+
+	opts.jobs = max(opts.jobs, 1)
+	return cfg, opts
+}
+
+func openStore(cfg config.Config, opts options) *cache.Cache {
+	if opts.clearCache {
+		if err := cache.Remove(cfg.CacheDir); err != nil {
+			fmt.Fprintf(os.Stderr, "git-repos: cache: %v\n", err)
+		}
+	}
+	if opts.noCache {
+		return cache.Off()
+	}
+
+	store, err := cache.Open(cfg.CacheDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "git-repos: cache: %v\n", err)
+	}
+	return store
+}
+
+func newContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout > 0 {
+		return context.WithTimeout(context.Background(), timeout)
+	}
+
+	return context.WithCancel(context.Background())
 }
 
 func newPrinter(opts options) *render.Printer {
@@ -325,32 +338,34 @@ func fail(err error) int {
 }
 
 func resolveRoots(flagRoots, configRoots []string) ([]string, error) {
-	roots := flagRoots
-	if len(roots) == 0 {
-		roots = configRoots
+	roots, err := rootCandidates(flagRoots, configRoots)
+	if err != nil {
+		return nil, err
 	}
-	if len(roots) == 0 {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return nil, err
-		}
-		roots = []string{cwd}
-	}
-	out := make([]string, 0, len(roots))
-	seen := map[string]bool{}
-	for _, root := range roots {
-		root = config.ExpandPath(root)
-		if root == "" || seen[root] {
-			continue
-		}
+
+	expanded := collections.Map(roots, config.ExpandPath)
+	out := collections.SortedUnique(collections.Filter(expanded, isSetDir))
+	for _, root := range out {
 		if _, err := os.Stat(root); err != nil {
 			return nil, fmt.Errorf("root %s: %w", root, err)
 		}
-		seen[root] = true
-		out = append(out, root)
 	}
-	sort.Strings(out)
 	return out, nil
+}
+
+func rootCandidates(flagRoots, configRoots []string) ([]string, error) {
+	switch {
+	case len(flagRoots) > 0:
+		return flagRoots, nil
+	case len(configRoots) > 0:
+		return configRoots, nil
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+	return []string{cwd}, nil
 }
 
 func newProvider(id string) (provider.Provider, error) {

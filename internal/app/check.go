@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/dimkarp93/git-repos/internal/cache"
@@ -103,6 +102,14 @@ type matched struct {
 	remoteName string
 }
 
+func (m matched) label() string {
+	if m.originName != "" {
+		return m.remote.FullName() + " (origin: " + m.originName + ")"
+	}
+
+	return m.remote.FullName()
+}
+
 func (m matched) gitRemote() string {
 	if m.remoteName == "" {
 		return "origin"
@@ -128,97 +135,134 @@ type inventory struct {
 	remotes     []provider.Repo
 }
 
+type matcher struct {
+	ctx    context.Context
+	prov   provider.Provider
+	byName map[string]provider.Repo
+	seen   map[string]bool
+	inv    inventory
+}
+
 func collect(ctx context.Context, prov provider.Provider, store *cache.Cache, cfg config.Config, roots []string, opts options, pr *progress) ([]matched, inventory, error) {
-	inv := inventory{}
 	locals, err := scanLocal(cfg, opts, roots, pr, store)
 	if err != nil {
-		return nil, inv, err
+		return nil, inventory{}, err
 	}
+	account, remotes, err := listRemotes(ctx, prov, pr)
+	if err != nil {
+		return nil, inventory{}, err
+	}
+
+	m := newMatcher(ctx, prov, account, locals, remotes)
+	pr.setPhase("matching against " + prov.Name())
+	pr.setTotal(len(locals))
+	for i, local := range locals {
+		pr.step(shortPath(local.Path), i)
+		m.match(local)
+	}
+	pr.complete()
+
+	inv := m.finish(remotes)
+	return inv.pairs, inv, nil
+}
+
+func listRemotes(ctx context.Context, prov provider.Provider, pr *progress) (string, []provider.Repo, error) {
 	pr.setPhase(prov.Name() + " api")
 	pr.setUnit("repositories")
 	account, err := prov.Account(ctx)
 	if err != nil {
-		return nil, inv, err
+		return "", nil, err
 	}
-	remotes, err := prov.ListRepos(ctx)
-	if err != nil {
-		return nil, inv, err
-	}
-	inv.account = account
-	inv.locals = locals
-	inv.localCount = len(locals)
-	inv.remoteCount = len(remotes)
-	inv.remotes = remotes
 
+	remotes, err := prov.ListRepos(ctx)
+	return account, remotes, err
+}
+
+func newMatcher(ctx context.Context, prov provider.Provider, account string, locals []scan.Repo, remotes []provider.Repo) *matcher {
 	byName := make(map[string]provider.Repo, len(remotes))
 	for _, repo := range remotes {
 		byName[strings.ToLower(repo.FullName())] = repo
 	}
 
-	resolve := func(url string) (provider.Repo, string, bool) {
-		owner, name, ok := prov.ParseRemote(url)
+	inv := inventory{account: account, locals: locals, localCount: len(locals), remoteCount: len(remotes), remotes: remotes}
+	return &matcher{ctx: ctx, prov: prov, byName: byName, seen: map[string]bool{}, inv: inv}
+}
+
+func (m *matcher) resolve(url string) (provider.Repo, string, bool) {
+	owner, name, ok := m.prov.ParseRemote(url)
+	if !ok {
+		return provider.Repo{}, "", false
+	}
+
+	full := owner + "/" + name
+	if remote, found := m.byName[strings.ToLower(full)]; found {
+		return remote, full, true
+	}
+	resolved, err := m.prov.Repo(m.ctx, owner, name)
+	if err != nil || resolved.Name == "" {
+		return provider.Repo{}, full, false
+	}
+	return resolved, full, true
+}
+
+func (m *matcher) match(local scan.Repo) {
+	remotesOf, err := gitcmd.Remotes(m.ctx, local.Path)
+	if err != nil {
+		m.inv.localOnly = append(m.inv.localOnly, LocalOnly{Path: local.Path, Kind: KindUnreadable, Reason: "origin unreadable"})
+		return
+	}
+
+	pair, other, found := m.originPair(local, remotesOf)
+	switch {
+	case found:
+		m.addPair(pair)
+	case other != "":
+		m.inv.localOnly = append(m.inv.localOnly, LocalOnly{Path: local.Path, Kind: KindNonOrigin, Reason: "origin is not on " + m.prov.Name() + ", remote " + other + " is"})
+	default:
+		m.inv.localOnly = append(m.inv.localOnly, unmatchedLocal(m.prov, local.Path, m.inv.account, originURLOf(remotesOf)))
+	}
+}
+
+func (m *matcher) originPair(local scan.Repo, remotesOf []gitcmd.Remote) (matched, string, bool) {
+	other := ""
+	for _, r := range remotesOf {
+		remote, full, ok := m.resolve(r.URL)
 		if !ok {
-			return provider.Repo{}, "", false
+			continue
 		}
-		full := owner + "/" + name
-		if remote, found := byName[strings.ToLower(full)]; found {
-			return remote, full, true
+		if r.Name == "origin" {
+			return originMatch(local, remote, r.Name, full), other, true
 		}
-		resolved, err := prov.Repo(ctx, owner, name)
-		if err != nil || resolved.Name == "" {
-			return provider.Repo{}, full, false
+
+		m.seen[strings.ToLower(remote.FullName())] = true
+		if other == "" {
+			other = r.Name
 		}
-		return resolved, full, true
+	}
+	return matched{}, other, false
+}
+
+func originMatch(local scan.Repo, remote provider.Repo, remoteName, full string) matched {
+	pair := matched{local: local, remote: remote, remoteName: remoteName}
+	if remote.FullName() != full {
+		pair.originName = full
+	}
+	return pair
+}
+
+func (m *matcher) addPair(pair matched) {
+	if pair.originName != "" {
+		m.inv.mismatched = append(m.inv.mismatched, OriginMismatch{Path: pair.local.Path, Origin: pair.originName, Canonical: pair.remote.FullName()})
 	}
 
-	seen := map[string]bool{}
-	pr.setPhase("matching against " + prov.Name())
-	pr.setTotal(len(locals))
-	for i, local := range locals {
-		pr.step(shortPath(local.Path), i)
-		remotesOf, err := gitcmd.Remotes(ctx, local.Path)
-		if err != nil {
-			inv.localOnly = append(inv.localOnly, LocalOnly{Path: local.Path, Kind: KindUnreadable, Reason: "origin unreadable"})
-			continue
-		}
-		pair, found := matched{}, false
-		other := ""
-		for _, r := range remotesOf {
-			remote, full, ok := resolve(r.URL)
-			if !ok {
-				continue
-			}
-			if r.Name != "origin" {
-				seen[strings.ToLower(remote.FullName())] = true
-				if other == "" {
-					other = r.Name
-				}
-				continue
-			}
-			pair, found = matched{local: local, remote: remote, remoteName: r.Name}, true
-			if remote.FullName() != full {
-				pair.originName = full
-			}
-			break
-		}
-		if found {
-			if pair.originName != "" {
-				inv.mismatched = append(inv.mismatched, OriginMismatch{Path: local.Path, Origin: pair.originName, Canonical: pair.remote.FullName()})
-			}
-			seen[strings.ToLower(pair.remote.FullName())] = true
-			inv.pairs = append(inv.pairs, pair)
-			continue
-		}
-		if other != "" {
-			inv.localOnly = append(inv.localOnly, LocalOnly{Path: local.Path, Kind: KindNonOrigin, Reason: "origin is not on " + prov.Name() + ", remote " + other + " is"})
-			continue
-		}
-		inv.localOnly = append(inv.localOnly, unmatchedLocal(prov, local.Path, account, originURLOf(remotesOf)))
-	}
+	m.seen[strings.ToLower(pair.remote.FullName())] = true
+	m.inv.pairs = append(m.inv.pairs, pair)
+}
 
-	pr.complete()
+func (m *matcher) finish(remotes []provider.Repo) inventory {
+	inv := m.inv
 	for _, repo := range remotes {
-		if !seen[strings.ToLower(repo.FullName())] {
+		if !m.seen[strings.ToLower(repo.FullName())] {
 			inv.remoteOnly = append(inv.remoteOnly, RemoteOnly{FullName: repo.FullName(), WebURL: repo.WebURL, Archived: repo.Archived, repo: repo})
 		}
 	}
@@ -226,7 +270,7 @@ func collect(ctx context.Context, prov provider.Provider, store *cache.Cache, cf
 	sort.Slice(inv.mismatched, func(i, j int) bool { return inv.mismatched[i].Path < inv.mismatched[j].Path })
 	sort.Slice(inv.localOnly, func(i, j int) bool { return inv.localOnly[i].Path < inv.localOnly[j].Path })
 	sort.Slice(inv.remoteOnly, func(i, j int) bool { return inv.remoteOnly[i].FullName < inv.remoteOnly[j].FullName })
-	return inv.pairs, inv, nil
+	return inv
 }
 
 func originURLOf(remotes []gitcmd.Remote) string {
@@ -271,24 +315,15 @@ func build(ctx context.Context, prov provider.Provider, store *cache.Cache, root
 
 func inspectAll(ctx context.Context, prov provider.Provider, store *cache.Cache, pairs []matched, opts options, pr *progress) []Result {
 	results := make([]Result, len(pairs))
-	sem := make(chan struct{}, opts.jobs)
 	pr.setPhase("checking branches")
 	pr.setTotal(len(pairs))
-	var wg sync.WaitGroup
-	for i, pair := range pairs {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sem <- struct{}{}
-			pr.begin(pair.remote.FullName())
-			defer func() {
-				pr.end()
-				<-sem
-			}()
-			results[i] = inspect(ctx, prov, store, pair, opts)
-		}()
-	}
-	wg.Wait()
+
+	parallel(opts.jobs, len(pairs), func(i int) {
+		pr.begin(pairs[i].remote.FullName())
+		defer pr.end()
+		results[i] = inspect(ctx, prov, store, pairs[i], opts)
+	})
+
 	sort.Slice(results, func(i, j int) bool {
 		if results[i].FullName == results[j].FullName {
 			return results[i].Path < results[j].Path
@@ -320,28 +355,26 @@ func inspect(ctx context.Context, prov provider.Provider, store *cache.Cache, pa
 	}
 	res.FetchedAt, res.FetchKnown = gitcmd.LastFetch(ctx, pair.local.Path)
 
-	remoteSHA, err := prov.BranchHead(ctx, pair.remote.Owner, pair.remote.Name, branch)
+	return inspectHeads(ctx, prov, pair, res)
+}
+
+func inspectHeads(ctx context.Context, prov provider.Provider, pair matched, res Result) Result {
+	remoteSHA, err := prov.BranchHead(ctx, pair.remote.Owner, pair.remote.Name, res.Branch)
 	if err != nil {
-		res.Status = StatusError
-		res.Detail = errText(err)
-		return res
+		return res.failed(StatusError, errText(err))
 	}
 	res.RemoteSHA = remoteSHA
 
-	localSHA, err := gitcmd.RevParse(ctx, pair.local.Path, branch)
+	localSHA, err := gitcmd.RevParse(ctx, pair.local.Path, res.Branch)
+	if errors.Is(err, gitcmd.ErrNoRef) {
+		return res.failed(StatusNoBranch, "no local "+res.Branch)
+	}
 	if err != nil {
-		if errors.Is(err, gitcmd.ErrNoRef) {
-			res.Status = StatusNoBranch
-			res.Detail = "no local " + branch
-			return res
-		}
-		res.Status = StatusError
-		res.Detail = errText(err)
-		return res
+		return res.failed(StatusError, errText(err))
 	}
 	res.LocalSHA = localSHA
 
-	status, detail := compare(ctx, prov, pair, branch, localSHA, remoteSHA)
+	status, detail := compare(ctx, prov, pair, res.Branch, localSHA, remoteSHA)
 	res.Status = status
 	if detail != "" {
 		res.Detail = detail
@@ -349,36 +382,51 @@ func inspect(ctx context.Context, prov provider.Provider, store *cache.Cache, pa
 	return res
 }
 
+func (r Result) failed(status Status, detail string) Result {
+	r.Status = status
+	r.Detail = detail
+	return r
+}
+
 func compare(ctx context.Context, prov provider.Provider, pair matched, branch, localSHA, remoteSHA string) (Status, string) {
 	if localSHA == remoteSHA {
 		return StatusSynced, ""
 	}
-	dir := pair.local.Path
-	if gitcmd.HasCommit(ctx, dir, remoteSHA) {
-		localIsAncestor, err := gitcmd.IsAncestor(ctx, dir, localSHA, remoteSHA)
-		if err != nil {
-			return StatusError, errText(err)
-		}
-		if localIsAncestor {
-			return StatusPull, ""
-		}
-		remoteIsAncestor, err := gitcmd.IsAncestor(ctx, dir, remoteSHA, localSHA)
-		if err != nil {
-			return StatusError, errText(err)
-		}
-		if remoteIsAncestor {
-			return StatusPush, ""
-		}
-		return StatusConflict, ""
+	if gitcmd.HasCommit(ctx, pair.local.Path, remoteSHA) {
+		return compareLocally(ctx, pair.local.Path, localSHA, remoteSHA)
 	}
 
 	status, err := prov.Compare(ctx, pair.remote.Owner, pair.remote.Name, remoteSHA, localSHA)
+	if errors.Is(err, provider.ErrNotFound) {
+		return StatusUnknown, "local commit unknown remotely, run with --fetch"
+	}
 	if err != nil {
-		if errors.Is(err, provider.ErrNotFound) {
-			return StatusUnknown, "local commit unknown remotely, run with --fetch"
-		}
 		return StatusUnknown, errText(err)
 	}
+	return compareStatus(status)
+}
+
+func compareLocally(ctx context.Context, dir, localSHA, remoteSHA string) (Status, string) {
+	localIsAncestor, err := gitcmd.IsAncestor(ctx, dir, localSHA, remoteSHA)
+	if err != nil {
+		return StatusError, errText(err)
+	}
+	if localIsAncestor {
+		return StatusPull, ""
+	}
+
+	remoteIsAncestor, err := gitcmd.IsAncestor(ctx, dir, remoteSHA, localSHA)
+	switch {
+	case err != nil:
+		return StatusError, errText(err)
+	case remoteIsAncestor:
+		return StatusPush, ""
+	default:
+		return StatusConflict, ""
+	}
+}
+
+func compareStatus(status provider.CompareStatus) (Status, string) {
 	switch status {
 	case provider.CompareIdentical:
 		return StatusSynced, ""
@@ -399,14 +447,18 @@ func resolveBranch(store *cache.Cache, providerName string, repo provider.Repo, 
 		store.Set(key, repo.DefaultBranch)
 		return repo.DefaultBranch
 	}
-	ttl := cacheTTL
-	if refresh {
-		ttl = time.Nanosecond
-	}
-	if branch, ok := store.Get(key, ttl); ok {
+	if branch, ok := store.Get(key, branchTTL(refresh)); ok {
 		return branch
 	}
 	return ""
+}
+
+func branchTTL(refresh bool) time.Duration {
+	if refresh {
+		return time.Nanosecond
+	}
+
+	return cacheTTL
 }
 
 func shortPath(path string) string {

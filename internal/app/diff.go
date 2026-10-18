@@ -3,6 +3,8 @@ package app
 import (
 	"flag"
 	"os"
+
+	"github.com/dimkarp93/git-repos/internal/render"
 )
 
 func diffFlags(opts *options) *flag.FlagSet {
@@ -15,6 +17,15 @@ func diffFlags(opts *options) *flag.FlagSet {
 	opts.filters.registerView(fs)
 	opts.filters.registerName(fs)
 	return fs
+}
+
+func outputReport(p *render.Printer, report Report, opts options) error {
+	if opts.asJSON {
+		return writeJSON(os.Stdout, filterReport(report, opts.filters))
+	}
+
+	printReport(p, report, opts.all, opts.filters)
+	return nil
 }
 
 func runDiff(args []string) int {
@@ -37,12 +48,9 @@ func runDiff(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	if opts.asJSON {
-		if err := writeJSON(os.Stdout, filterReport(report, opts.filters)); err != nil {
-			return fail(err)
-		}
-	} else {
-		printReport(s.printer, report, opts.all, opts.filters)
+
+	if err := outputReport(s.printer, report, opts); err != nil {
+		return fail(err)
 	}
 	if report.diverges() {
 		return ExitDiff

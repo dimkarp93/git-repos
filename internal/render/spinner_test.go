@@ -6,6 +6,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type syncBuffer struct {
@@ -25,36 +28,53 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-func TestSpinnerDrawsLabelAndClearsOnStop(t *testing.T) {
+type countedLabel struct {
+	calls int
+}
+
+func (c *countedLabel) label() string {
+	c.calls++
+	return "in flight — 3"
+}
+
+func spun(t *testing.T) (string, int) {
+	t.Helper()
+
 	out := &syncBuffer{}
 	s := NewSpinner(out, true)
-	counter := 0
-	s.Start(func() string {
-		counter++
-		return "in flight — 3"
-	})
+	label := &countedLabel{}
+	s.Start(label.label)
 	time.Sleep(3 * spinnerInterval)
 	s.Stop()
 
-	got := out.String()
-	if !strings.Contains(got, "in flight — 3") {
-		t.Fatalf("label missing: %q", got)
-	}
-	if !strings.HasSuffix(got, "\r\x1b[K") {
-		t.Fatalf("line not cleared on stop: %q", got)
-	}
-	if counter < 2 {
-		t.Fatalf("label evaluated %d times, expected repeated redraws", counter)
-	}
+	return out.String(), label.calls
+}
+
+func animationFrames(out string) int {
 	frames := 0
 	for _, frame := range spinnerFrames {
-		if strings.Contains(got, frame) {
+		if strings.Contains(out, frame) {
 			frames++
 		}
 	}
-	if frames < 2 {
-		t.Fatalf("spinner did not animate: %q", got)
-	}
+	return frames
+}
+
+func TestSpinnerDrawsLabelAndClearsOnStop(t *testing.T) {
+	got, calls := spun(t)
+
+	t.Run("label", func(t *testing.T) {
+		assert.Contains(t, got, "in flight — 3")
+	})
+	t.Run("cleared on stop", func(t *testing.T) {
+		assert.True(t, strings.HasSuffix(got, "\r\x1b[K"), got)
+	})
+	t.Run("redrawn", func(t *testing.T) {
+		assert.GreaterOrEqual(t, calls, 2)
+	})
+	t.Run("animated", func(t *testing.T) {
+		assert.GreaterOrEqual(t, animationFrames(got), 2)
+	})
 }
 
 func TestSpinnerDisabledWritesNothing(t *testing.T) {
@@ -63,9 +83,7 @@ func TestSpinnerDisabledWritesNothing(t *testing.T) {
 	s.Start(func() string { return "x" })
 	time.Sleep(2 * spinnerInterval)
 	s.Stop()
-	if out.String() != "" {
-		t.Fatalf("disabled spinner wrote %q", out.String())
-	}
+	require.Equal(t, "", out.String(), "disabled spinner wrote %q", out.String())
 }
 
 func TestSpinnerRestartAndDoubleStop(t *testing.T) {
@@ -81,7 +99,6 @@ func TestSpinnerRestartAndDoubleStop(t *testing.T) {
 	s.Stop()
 
 	got := out.String()
-	if !strings.Contains(got, "первый") || !strings.Contains(got, "второй") {
-		t.Fatalf("output = %q", got)
-	}
+	assert.Contains(t, got, "первый")
+	assert.Contains(t, got, "второй")
 }

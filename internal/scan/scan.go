@@ -40,44 +40,65 @@ func Find(opts Options) ([]Repo, error) {
 	return out, nil
 }
 
+type walker struct {
+	root string
+	opts Options
+	seen map[string]bool
+	out  *[]Repo
+}
+
 func walk(root string, opts Options, seen map[string]bool, out *[]Repo) error {
-	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			if path == root {
-				return err
-			}
-			return nil
-		}
-		if !d.IsDir() {
-			return nil
-		}
-		if opts.OnDir != nil {
-			opts.OnDir(path)
-		}
-		if path != root {
-			name := d.Name()
-			if ignored(name, opts.Ignore) {
-				return fs.SkipDir
-			}
-			if strings.HasPrefix(name, ".") {
-				return fs.SkipDir
-			}
-		}
-		if IsRepo(path) {
-			if !seen[path] {
-				seen[path] = true
-				*out = append(*out, Repo{Path: path})
-				if opts.OnRepo != nil {
-					opts.OnRepo(path)
-				}
-			}
-			return fs.SkipDir
-		}
-		if opts.MaxDepth > 0 && depth(root, path) >= opts.MaxDepth {
-			return fs.SkipDir
-		}
+	w := walker{root: root, opts: opts, seen: seen, out: out}
+	return filepath.WalkDir(root, w.visit)
+}
+
+func (w walker) visit(path string, d fs.DirEntry, err error) error {
+	if err != nil {
+		return w.walkError(path, err)
+	}
+	if !d.IsDir() {
 		return nil
-	})
+	}
+
+	if w.opts.OnDir != nil {
+		w.opts.OnDir(path)
+	}
+	if path != w.root && w.skipped(d.Name()) {
+		return fs.SkipDir
+	}
+
+	if IsRepo(path) {
+		w.record(path)
+		return fs.SkipDir
+	}
+	if w.opts.MaxDepth > 0 && depth(w.root, path) >= w.opts.MaxDepth {
+		return fs.SkipDir
+	}
+	return nil
+}
+
+func (w walker) walkError(path string, err error) error {
+	if path == w.root {
+		return err
+	}
+
+	return nil
+}
+
+func (w walker) skipped(name string) bool {
+	return ignored(name, w.opts.Ignore) || strings.HasPrefix(name, ".")
+}
+
+func (w walker) record(path string) {
+	if w.seen[path] {
+		return
+	}
+
+	w.seen[path] = true
+	*w.out = append(*w.out, Repo{Path: path})
+	if w.opts.OnRepo != nil {
+		w.opts.OnRepo(path)
+	}
 }
 
 func depth(root, path string) int {

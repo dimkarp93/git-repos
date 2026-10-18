@@ -9,6 +9,8 @@ import (
 	"time"
 	"unicode/utf8"
 	"unsafe"
+
+	"github.com/dimkarp93/utils/pkg/collections"
 )
 
 const (
@@ -85,40 +87,15 @@ func (p *Printer) Table(title string, headers []string, rows [][]Cell) {
 	if len(rows) == 0 {
 		return
 	}
-	widths := make([]int, len(headers))
-	for i, h := range headers {
-		widths[i] = utf8.RuneCountInString(h)
-	}
-	for _, row := range rows {
-		for i, cell := range row {
-			if i >= len(widths) {
-				continue
-			}
-			if w := utf8.RuneCountInString(cell.Text); w > widths[i] {
-				widths[i] = w
-			}
-		}
-	}
+
+	widths := columnWidths(headers, rows)
 	fit(widths, p.Width)
 	if title != "" {
-		want := utf8.RuneCountInString(title) + 4
-		if p.Width > 0 && want > p.Width-2 {
-			want = p.Width - 2
-		}
-		grow(widths, want)
+		grow(widths, p.titleWidth(title))
 	}
 
-	if title != "" {
-		fmt.Fprintln(p.Out, p.titleLine(title, widths))
-		fmt.Fprintln(p.Out, rule(widths, "├", "┬", "┤"))
-	} else {
-		fmt.Fprintln(p.Out, rule(widths, "┌", "┬", "┐"))
-	}
-	head := make([]Cell, len(headers))
-	for i, h := range headers {
-		head[i] = Cell{Text: h, Color: Bold}
-	}
-	fmt.Fprintln(p.Out, p.row(head, widths))
+	p.printTop(title, widths)
+	fmt.Fprintln(p.Out, p.row(headerCells(headers), widths))
 	fmt.Fprintln(p.Out, rule(widths, "├", "┼", "┤"))
 	for _, row := range rows {
 		fmt.Fprintln(p.Out, p.row(row, widths))
@@ -126,13 +103,51 @@ func (p *Printer) Table(title string, headers []string, rows [][]Cell) {
 	fmt.Fprintln(p.Out, rule(widths, "└", "┴", "┘"))
 }
 
+func columnWidths(headers []string, rows [][]Cell) []int {
+	widths := make([]int, len(headers))
+	for i, h := range headers {
+		widths[i] = utf8.RuneCountInString(h)
+	}
+
+	for _, row := range rows {
+		for i, cell := range row[:min(len(row), len(widths))] {
+			widths[i] = max(widths[i], utf8.RuneCountInString(cell.Text))
+		}
+	}
+	return widths
+}
+
+func (p *Printer) titleWidth(title string) int {
+	want := utf8.RuneCountInString(title) + 4
+	if p.Width > 0 && want > p.Width-2 {
+		return p.Width - 2
+	}
+
+	return want
+}
+
+func (p *Printer) printTop(title string, widths []int) {
+	if title == "" {
+		fmt.Fprintln(p.Out, rule(widths, "┌", "┬", "┐"))
+		return
+	}
+
+	fmt.Fprintln(p.Out, p.titleLine(title, widths))
+	fmt.Fprintln(p.Out, rule(widths, "├", "┬", "┤"))
+}
+
+func headerCells(headers []string) []Cell {
+	head := make([]Cell, len(headers))
+	for i, h := range headers {
+		head[i] = Cell{Text: h, Color: Bold}
+	}
+	return head
+}
+
 func (p *Printer) row(cells []Cell, widths []int) string {
 	out := make([]string, 0, len(widths))
 	for i, width := range widths {
-		cell := Cell{}
-		if i < len(cells) {
-			cell = cells[i]
-		}
+		cell := collections.At(cells, i)
 		text := Ellipsis(cell.Text, width)
 		out = append(out, " "+p.paintCell(cell, text)+strings.Repeat(" ", gap(text, width))+" ")
 	}
@@ -151,10 +166,7 @@ func (p *Printer) paintCell(cell Cell, text string) string {
 }
 
 func (p *Printer) titleLine(title string, widths []int) string {
-	rest := inner(widths) - utf8.RuneCountInString(title) - 3
-	if rest < 0 {
-		rest = 0
-	}
+	rest := max(inner(widths)-utf8.RuneCountInString(title)-3, 0)
 	return "┌─ " + p.paint(Bold, title) + " " + strings.Repeat("─", rest) + "┐"
 }
 
@@ -230,9 +242,7 @@ func AgeColor(d time.Duration) string {
 }
 
 func humanAge(d time.Duration) string {
-	if d < 0 {
-		d = 0
-	}
+	d = max(d, 0)
 	switch {
 	case d < time.Minute:
 		return "just now"

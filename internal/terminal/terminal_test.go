@@ -2,9 +2,13 @@ package terminal
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func kinds(keys []Key) []KeyKind {
@@ -36,37 +40,34 @@ func TestParseKeys(t *testing.T) {
 		{"a\x1b", []KeyKind{KeyRune, KeyEsc}},
 	}
 	for _, tc := range cases {
-		got := kinds(ParseKeys([]byte(tc.in)))
-		if len(got) != len(tc.want) {
-			t.Errorf("ParseKeys(%q) = %v, want %v", tc.in, got, tc.want)
-			continue
-		}
-		for i := range got {
-			if got[i] != tc.want[i] {
-				t.Errorf("ParseKeys(%q) = %v, want %v", tc.in, got, tc.want)
-				break
-			}
-		}
-	}
-	if keys := ParseKeys([]byte("я")); keys[0].Rune != 'я' {
-		t.Errorf("rune = %q", keys[0].Rune)
+		t.Run(fmt.Sprintf("%q", tc.in), func(t *testing.T) {
+			assert.Equal(t, tc.want, kinds(ParseKeys([]byte(tc.in))))
+		})
 	}
 }
 
+func TestParseKeysDecodesRune(t *testing.T) {
+	assert.Equal(t, []Key{{Kind: KeyRune, Rune: 'я'}}, ParseKeys([]byte("я")))
+}
+
 func TestEditor(t *testing.T) {
-	e := NewEditor("ab")
-	if !e.Handle(Key{Kind: KeyRune, Rune: 'я'}) || e.String() != "abя" {
-		t.Fatalf("text = %q", e.String())
+	cases := map[string]struct {
+		start   string
+		key     Key
+		changed bool
+		want    string
+	}{
+		"insert rune":     {start: "ab", key: Key{Kind: KeyRune, Rune: 'я'}, changed: true, want: "abя"},
+		"backspace":       {start: "abя", key: Key{Kind: KeyBackspace}, changed: true, want: "ab"},
+		"arrow":           {start: "ab", key: Key{Kind: KeyUp}, want: "ab"},
+		"backspace empty": {start: "", key: Key{Kind: KeyBackspace}, want: ""},
 	}
-	if !e.Handle(Key{Kind: KeyBackspace}) || e.String() != "ab" {
-		t.Fatalf("text = %q", e.String())
-	}
-	if e.Handle(Key{Kind: KeyUp}) {
-		t.Fatal("arrow must not change the text")
-	}
-	empty := NewEditor("")
-	if empty.Handle(Key{Kind: KeyBackspace}) {
-		t.Fatal("backspace on empty text must not change it")
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			e := NewEditor(tc.start)
+			changed := e.Handle(tc.key)
+			assert.Equal(t, []any{tc.changed, tc.want}, []any{changed, e.String()})
+		})
 	}
 }
 
@@ -74,61 +75,75 @@ func plain(s string) string {
 	return strings.NewReplacer(Reverse, "", Reset, "").Replace(s)
 }
 
-func TestGridLayout(t *testing.T) {
-	items := make([]string, 0, 20)
-	for i := 0; i < 20; i++ {
+func gridItems(n int) []string {
+	items := make([]string, 0, n)
+	for i := range n {
 		items = append(items, "r"+string(rune('a'+i)))
 	}
-	lines := Grid(items, 0, 2, 30)
-	if len(lines) != 12 {
-		t.Fatalf("lines = %d, want 12", len(lines))
-	}
-	width := utf8.RuneCountInString(plain(lines[0]))
-	if width != 1+32+1+32+1 {
-		t.Fatalf("width = %d", width)
-	}
-	for _, line := range lines {
-		if got := utf8.RuneCountInString(plain(line)); got != width {
-			t.Fatalf("line %q width = %d, want %d", plain(line), got, width)
+	return items
+}
+
+func gridLines(t *testing.T) []string {
+	t.Helper()
+
+	lines := Grid(gridItems(20), 0, 2, 30)
+	require.Len(t, lines, 12)
+
+	return lines
+}
+
+func TestGridLayout(t *testing.T) {
+	lines := gridLines(t)
+
+	t.Run("equal widths", func(t *testing.T) {
+		for _, line := range lines {
+			assert.Equal(t, 1+32+1+32+1, utf8.RuneCountInString(plain(line)))
 		}
-	}
-	if !strings.HasPrefix(plain(lines[1]), "│ ra ") || !strings.Contains(plain(lines[1]), "│ rk ") {
-		t.Fatalf("first row = %q", plain(lines[1]))
-	}
-	if !strings.Contains(lines[1], Reverse) || strings.Contains(lines[2], Reverse) {
-		t.Fatal("only the selected cell must be highlighted")
-	}
+	})
+	t.Run("column order", func(t *testing.T) {
+		assert.Regexp(t, `^│ ra .*│ rk `, plain(lines[1]))
+	})
+	t.Run("selected highlighted", func(t *testing.T) {
+		assert.Contains(t, lines[1], Reverse)
+	})
+	t.Run("others plain", func(t *testing.T) {
+		assert.NotContains(t, lines[2], Reverse)
+	})
 }
 
-func TestGridTruncatesAndHandlesEmpty(t *testing.T) {
-	long := strings.Repeat("x", 40)
-	lines := Grid([]string{long}, 0, 2, 30)
-	if !strings.Contains(plain(lines[1]), strings.Repeat("x", 29)+"…") {
-		t.Fatalf("row = %q", plain(lines[1]))
-	}
+func TestGridTruncates(t *testing.T) {
+	lines := Grid([]string{strings.Repeat("x", 40)}, 0, 2, 30)
+
+	assert.Contains(t, plain(lines[1]), strings.Repeat("x", 29)+"…")
+}
+
+func TestGridEmpty(t *testing.T) {
 	empty := Grid(nil, 0, 2, 30)
-	if len(empty) != 3 || strings.Contains(empty[1], Reverse) {
-		t.Fatalf("empty grid = %q", empty)
-	}
+
+	require.Len(t, empty, 3)
+	assert.NotContains(t, empty[1], Reverse)
 }
 
-func TestScreenRedraw(t *testing.T) {
+func screenOutputs(steps ...func(*Screen)) []string {
 	var out bytes.Buffer
 	s := NewScreen(&out)
-	s.Draw([]string{"a", "b", "c"})
-	out.Reset()
-	s.Draw([]string{"x"})
-	if got := out.String(); got != "\x1b[2A\r\x1b[Jx" {
-		t.Fatalf("redraw = %q", got)
+	got := make([]string, 0, len(steps))
+	for _, step := range steps {
+		out.Reset()
+		step(s)
+		got = append(got, out.String())
 	}
-	out.Reset()
-	s.Clear()
-	if got := out.String(); got != "\r\x1b[J" {
-		t.Fatalf("clear = %q", got)
-	}
-	out.Reset()
-	s.Clear()
-	if out.Len() != 0 {
-		t.Fatalf("second clear wrote %q", out.String())
-	}
+	return got
+}
+
+func drawLines(lines ...string) func(*Screen) {
+	return func(s *Screen) { s.Draw(lines) }
+}
+
+func clearScreen(s *Screen) { s.Clear() }
+
+func TestScreenRedraw(t *testing.T) {
+	got := screenOutputs(drawLines("a", "b", "c"), drawLines("x"), clearScreen, clearScreen)
+
+	assert.Equal(t, []string{"a\r\nb\r\nc", "\x1b[2A\r\x1b[Jx", "\r\x1b[J", ""}, got)
 }

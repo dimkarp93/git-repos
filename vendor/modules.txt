@@ -1,3 +1,16 @@
 # github.com/dimkarp93/install-libs v0.2.0
 ## explicit; go 1.24
 github.com/dimkarp93/install-libs/buildinfo
+# github.com/dimkarp93/utils v0.1.1
+## explicit; go 1.27.2
+github.com/dimkarp93/utils/pkg/collections
+# github.com/stretchr/testify v1.12.1
+## explicit; go 1.17
+github.com/stretchr/testify/assert
+github.com/stretchr/testify/assert/yaml
+github.com/stretchr/testify/internal/difflib
+github.com/stretchr/testify/internal/spew
+github.com/stretchr/testify/require
+# go.yaml.in/yaml/v3 v3.0.5
+## explicit; go 1.16
+go.yaml.in/yaml/v3

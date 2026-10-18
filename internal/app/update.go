@@ -4,10 +4,10 @@ import (
 	"context"
 	"flag"
 	"sort"
-	"sync"
 
 	"github.com/dimkarp93/git-repos/internal/gitcmd"
 	"github.com/dimkarp93/git-repos/internal/render"
+	"github.com/dimkarp93/utils/pkg/collections"
 )
 
 type fetchResult struct {
@@ -46,22 +46,8 @@ func runUpdate(args []string) int {
 	results := fetchAll(s.ctx, s, pairs, opts, s.pr)
 	s.spinner.Stop()
 
-	rows := make([][]render.Cell, 0, len(results))
-	failed := 0
-	for _, res := range results {
-		status := render.Cell{Text: "fetched", Color: render.Grey}
-		if res.Err != nil {
-			failed++
-			status = render.Cell{Text: render.Ellipsis("error: "+errText(res.Err), maxDetailWidth), Color: render.Red}
-		}
-		rows = append(rows, []render.Cell{
-			{Text: res.FullName, Color: render.Bold},
-			render.Plain(res.Branch),
-			status,
-			{Text: render.Ellipsis(res.Path, maxPathWidth), Color: render.Grey},
-		})
-	}
-	s.printer.Table("Fetch result", []string{"REPOSITORY", "BRANCH", "RESULT", "PATH"}, rows)
+	failed := countFetchFailed(results)
+	s.printer.Table("Fetch result", []string{"REPOSITORY", "BRANCH", "RESULT", "PATH"}, fetchRows(results))
 	s.printer.Line("", "Summary: updated — %d, errors — %d", len(results)-failed, failed)
 	if failed > 0 {
 		return ExitFailure
@@ -69,38 +55,56 @@ func runUpdate(args []string) int {
 	return ExitOK
 }
 
+func countFetchFailed(results []fetchResult) int {
+	return collections.CountFunc(results, func(res fetchResult) bool {
+		return res.Err != nil
+	})
+}
+
+func fetchRows(results []fetchResult) [][]render.Cell {
+	return collections.Map(results, fetchRow)
+}
+
+func fetchRow(res fetchResult) []render.Cell {
+	return []render.Cell{
+		{Text: res.FullName, Color: render.Bold},
+		render.Plain(res.Branch),
+		fetchStatus(res.Err),
+		{Text: render.Ellipsis(res.Path, maxPathWidth), Color: render.Grey},
+	}
+}
+
+func fetchStatus(err error) render.Cell {
+	if err != nil {
+		return render.Cell{Text: render.Ellipsis("error: "+errText(err), maxDetailWidth), Color: render.Red}
+	}
+
+	return render.Cell{Text: "fetched", Color: render.Grey}
+}
+
 func fetchAll(ctx context.Context, s *session, pairs []matched, opts options, pr *progress) []fetchResult {
 	results := make([]fetchResult, len(pairs))
-	sem := make(chan struct{}, opts.jobs)
 	pr.setPhase("fetch")
 	pr.setTotal(len(pairs))
 
-	var wg sync.WaitGroup
-	for i, pair := range pairs {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sem <- struct{}{}
-			pr.begin(pair.remote.FullName())
-			defer func() {
-				pr.end()
-				<-sem
-			}()
-			branch := resolveBranch(s.store, s.prov.Name(), pair.remote, opts.refresh)
-			name := pair.remote.FullName()
-			if pair.originName != "" {
-				name += " (origin: " + pair.originName + ")"
-			}
-			res := fetchResult{FullName: name, Path: shortPath(pair.local.Path), Branch: branch}
-			if branch == "" {
-				res.Err = errDefaultBranchUnknown
-			} else {
-				res.Err = gitcmd.Fetch(ctx, pair.local.Path, pair.gitRemote(), branch)
-			}
-			results[i] = res
-		}()
-	}
-	wg.Wait()
+	parallel(opts.jobs, len(pairs), func(i int) {
+		pr.begin(pairs[i].remote.FullName())
+		defer pr.end()
+		results[i] = fetchPair(ctx, s, pairs[i], opts)
+	})
+
 	sort.Slice(results, func(i, j int) bool { return results[i].FullName < results[j].FullName })
 	return results
+}
+
+func fetchPair(ctx context.Context, s *session, pair matched, opts options) fetchResult {
+	branch := resolveBranch(s.store, s.prov.Name(), pair.remote, opts.refresh)
+	res := fetchResult{FullName: pair.label(), Path: shortPath(pair.local.Path), Branch: branch}
+	if branch == "" {
+		res.Err = errDefaultBranchUnknown
+		return res
+	}
+
+	res.Err = gitcmd.Fetch(ctx, pair.local.Path, pair.gitRemote(), branch)
+	return res
 }

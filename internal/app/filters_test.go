@@ -1,6 +1,10 @@
 package app
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
 
 func TestFiltersMatchResult(t *testing.T) {
 	cases := []struct {
@@ -21,9 +25,9 @@ func TestFiltersMatchResult(t *testing.T) {
 		{"status-фильтр не пропускает ветки", filters{feature: true}, StatusPull, false},
 	}
 	for _, tc := range cases {
-		if got := tc.f.matchResult(Result{Status: tc.status}); got != tc.want {
-			t.Errorf("%s: matchResult(%s) = %v", tc.name, tc.status, got)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, tc.f.matchResult(Result{Status: tc.status}))
+		})
 	}
 }
 
@@ -59,9 +63,7 @@ func TestFiltersMatchStatus(t *testing.T) {
 		{"view-фильтр не пропускает статусы", filters{behind: true}, both, false},
 	}
 	for _, tc := range cases {
-		if got := tc.f.matchStatus(tc.res); got != tc.want {
-			t.Errorf("%s: matchStatus = %v", tc.name, got)
-		}
+		assert.Equal(t, tc.want, tc.f.matchStatus(tc.res))
 	}
 }
 
@@ -83,9 +85,7 @@ func TestFiltersMatchName(t *testing.T) {
 		{"project и branch — один не совпал", filters{project: "repos", branch: "dev"}, false},
 	}
 	for _, tc := range cases {
-		if got := tc.f.matchResult(repo); got != tc.want {
-			t.Errorf("%s: matchResult = %v", tc.name, got)
-		}
+		assert.Equal(t, tc.want, tc.f.matchResult(repo))
 	}
 }
 
@@ -102,10 +102,21 @@ func TestFiltersMatchNameStatus(t *testing.T) {
 		{"branch не совпадает", filters{branch: "main"}, false},
 	}
 	for _, tc := range cases {
-		if got := tc.f.matchStatus(res); got != tc.want {
-			t.Errorf("%s: matchStatus = %v", tc.name, got)
-		}
+		assert.Equal(t, tc.want, tc.f.matchStatus(res))
 	}
+}
+
+type reportView struct {
+	local, remote int
+	repos         []string
+}
+
+func viewReport(r Report) reportView {
+	v := reportView{local: len(r.LocalOnly), remote: len(r.RemoteOnly)}
+	for _, res := range r.Repos {
+		v.repos = append(v.repos, res.FullName)
+	}
+	return v
 }
 
 func TestFilterReportKeepsOnlySelected(t *testing.T) {
@@ -118,32 +129,29 @@ func TestFilterReportKeepsOnlySelected(t *testing.T) {
 			{FullName: "o/synced", Status: StatusSynced},
 		},
 	}
-	out := filterReport(report, filters{behind: true})
-	if len(out.LocalOnly) != 0 || len(out.RemoteOnly) != 0 {
-		t.Fatalf("presence = %+v / %+v", out.LocalOnly, out.RemoteOnly)
+	cases := map[string]struct {
+		f    filters
+		want reportView
+	}{
+		"behind":         {f: filters{behind: true}, want: reportView{repos: []string{"o/behind"}}},
+		"local or ahead": {f: filters{local: true, ahead: true}, want: reportView{local: 1, repos: []string{"o/ahead"}}},
+		"no filters":     {f: filters{}, want: reportView{local: 1, remote: 1, repos: []string{"o/behind", "o/ahead", "o/synced"}}},
 	}
-	if len(out.Repos) != 1 || out.Repos[0].FullName != "o/behind" {
-		t.Fatalf("repos = %+v", out.Repos)
-	}
-
-	out = filterReport(report, filters{local: true, ahead: true})
-	if len(out.LocalOnly) != 1 || len(out.RemoteOnly) != 0 {
-		t.Fatalf("presence = %+v / %+v", out.LocalOnly, out.RemoteOnly)
-	}
-	if len(out.Repos) != 1 || out.Repos[0].FullName != "o/ahead" {
-		t.Fatalf("repos = %+v", out.Repos)
-	}
-
-	if got := filterReport(report, filters{}); len(got.Repos) != 3 || len(got.LocalOnly) != 1 {
-		t.Fatalf("без фильтров отчёт изменился: %+v", got)
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tc.want, viewReport(filterReport(report, tc.f)))
+		})
 	}
 }
 
 func TestFiltersNames(t *testing.T) {
-	if got := (filters{behind: true, wip: true}).names(); got != "--behind, --wip" {
-		t.Fatalf("names = %q", got)
+	cases := map[string]filters{
+		"--behind, --wip":                         {behind: true, wip: true},
+		"--behind, --project=acme, --branch=main": {behind: true, project: "acme", branch: "main"},
 	}
-	if got := (filters{behind: true, project: "acme", branch: "main"}).names(); got != "--behind, --project=acme, --branch=main" {
-		t.Fatalf("names = %q", got)
+	for want, f := range cases {
+		t.Run(want, func(t *testing.T) {
+			assert.Equal(t, want, f.names())
+		})
 	}
 }

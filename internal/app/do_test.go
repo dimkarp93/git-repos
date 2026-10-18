@@ -6,17 +6,19 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/dimkarp93/git-repos/internal/cache"
 	"github.com/dimkarp93/git-repos/internal/config"
 	"github.com/dimkarp93/git-repos/internal/render"
+	"github.com/dimkarp93/utils/pkg/collections"
 )
 
 func doSession(t *testing.T, root string, out *strings.Builder) *session {
 	t.Helper()
 	store, err := cache.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return &session{
 		ctx:     t.Context(),
 		cfg:     config.Default(),
@@ -36,12 +38,13 @@ func TestSelectReposWithoutFilters(t *testing.T) {
 	s := doSession(t, root, &out)
 
 	targets, err := selectRepos(s, options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(targets) != 2 || filepath.Base(targets[0]) != "a" || filepath.Base(targets[1]) != "b" {
-		t.Fatalf("targets = %v", targets)
-	}
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a", "b"}, baseNames(targets))
+}
+
+func baseNames(paths []string) []string {
+	return collections.Map(paths, filepath.Base)
 }
 
 func TestSelectReposByInDevelop(t *testing.T) {
@@ -50,19 +53,14 @@ func TestSelectReposByInDevelop(t *testing.T) {
 	commit(t, clean, "a.txt")
 	dirty := newRepo(t, root, "o/dirty")
 	commit(t, dirty, "a.txt")
-	if err := os.WriteFile(filepath.Join(dirty, "b.txt"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(filepath.Join(dirty, "b.txt"), []byte("x"), 0o644))
 	var out strings.Builder
 	s := doSession(t, root, &out)
 
 	targets, err := selectRepos(s, options{jobs: 1, filters: filters{inDevelop: true}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(targets) != 1 || filepath.Base(targets[0]) != "dirty" {
-		t.Fatalf("targets = %v", targets)
-	}
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"dirty"}, baseNames(targets))
 }
 
 func TestExecAllContinuesAfterFailure(t *testing.T) {
@@ -72,15 +70,15 @@ func TestExecAllContinuesAfterFailure(t *testing.T) {
 	var out strings.Builder
 	s := doSession(t, root, &out)
 
-	if code := execAll(s, []string{first, second}, "exit 3"); code != ExitFailure {
-		t.Fatalf("code = %d", code)
-	}
-	text := out.String()
-	if !strings.Contains(text, "[1/2] :: a") || !strings.Contains(text, "[2/2] :: b") {
-		t.Fatalf("out = %q", text)
-	}
-	if !strings.Contains(text, "done — 0, errors — 2") {
-		t.Fatalf("out = %q", text)
+	code := execAll(s, []string{first, second}, "exit 3")
+
+	t.Run("exit code", func(t *testing.T) {
+		assert.Equal(t, ExitFailure, code)
+	})
+	for _, want := range []string{"[1/2] :: a", "[2/2] :: b", "done — 0, errors — 2"} {
+		t.Run(want, func(t *testing.T) {
+			assert.Contains(t, out.String(), want)
+		})
 	}
 }
 
@@ -91,16 +89,12 @@ func TestExecAllPassesEnvAndDir(t *testing.T) {
 	var out strings.Builder
 	s := doSession(t, root, &out)
 
-	if code := execAll(s, []string{dir}, "printf '%s' \"$GIT_REPOS_NAME\" > marker"); code != ExitOK {
-		t.Fatalf("code = %d", code)
-	}
+	code := execAll(s, []string{dir}, "printf '%s' \"$GIT_REPOS_NAME\" > marker")
+
+	require.Equal(t, ExitOK, code)
 	data, err := os.ReadFile(marker)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != "a" {
-		t.Fatalf("marker = %q", data)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "a", string(data))
 }
 
 func TestShellScriptQuoting(t *testing.T) {
@@ -114,8 +108,6 @@ func TestShellScriptQuoting(t *testing.T) {
 		{[]string{"echo", "it's"}, `echo 'it'\''s'`},
 	}
 	for _, tc := range cases {
-		if got := shellScript(tc.action); got != tc.want {
-			t.Errorf("shellScript(%q) = %q, want %q", tc.action, got, tc.want)
-		}
+		assert.Equal(t, tc.want, shellScript(tc.action))
 	}
 }

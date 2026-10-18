@@ -4,16 +4,18 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
-	"sync"
 
 	"github.com/dimkarp93/git-repos/internal/gitcmd"
 	"github.com/dimkarp93/git-repos/internal/provider"
 	"github.com/dimkarp93/git-repos/internal/render"
 	"github.com/dimkarp93/git-repos/internal/scan"
+	"github.com/dimkarp93/utils/pkg/collections"
 )
 
 const (
@@ -82,11 +84,8 @@ func runFix(args []string) int {
 	if ok, code := parseFlags(fs, args); !ok {
 		return code
 	}
-	if opts.protocol != "" && opts.protocol != provider.ProtocolSSH && opts.protocol != provider.ProtocolHTTPS {
-		return fail(errors.New("--protocol accepts ssh or https"))
-	}
-	if opts.minSimilarity <= 0 || opts.minSimilarity > 1 {
-		return fail(errors.New("--min-similarity accepts a value above 0 and up to 1"))
+	if err := validateFix(opts); err != nil {
+		return fail(err)
 	}
 
 	s, err := start(opts)
@@ -102,12 +101,7 @@ func runFix(args []string) int {
 		s.spinner.Stop()
 		return fail(err)
 	}
-	var candidates []localMatches
-	if len(inv.localOnly) > 0 && len(inv.remoteOnly) > 0 {
-		locals := s.localFacts(inv.localOnly, inv.remotes, opts)
-		remotes := s.remoteFacts(inv.remoteOnly, opts)
-		candidates = s.findMatches(locals, remotes, opts)
-	}
+	candidates := s.fixCandidates(inv, opts)
 	s.spinner.Stop()
 
 	differ := differentNames(inv.pairs)
@@ -116,25 +110,63 @@ func runFix(args []string) int {
 		return ExitOK
 	}
 
+	stats, err := s.applyFix(inv, candidates, differ, opts)
+	if err != nil {
+		return fail(err)
+	}
+	return s.fixSummary(len(candidates), stats, opts)
+}
+
+func validateFix(opts options) error {
+	if opts.protocol != "" && opts.protocol != provider.ProtocolSSH && opts.protocol != provider.ProtocolHTTPS {
+		return errors.New("--protocol accepts ssh or https")
+	}
+	if opts.minSimilarity <= 0 || opts.minSimilarity > 1 {
+		return errors.New("--min-similarity accepts a value above 0 and up to 1")
+	}
+	return nil
+}
+
+func (s *session) fixCandidates(inv inventory, opts options) []localMatches {
+	if len(inv.localOnly) == 0 || len(inv.remoteOnly) == 0 {
+		return nil
+	}
+
+	locals := s.localFacts(inv.localOnly, inv.remotes, opts)
+	remotes := s.remoteFacts(inv.remoteOnly, opts)
+	return s.findMatches(locals, remotes, opts)
+}
+
+func (s *session) applyFix(inv inventory, candidates []localMatches, differ []matched, opts options) (fixStats, error) {
 	var c *confirmer
 	if !opts.dryRun {
 		c = newConfirmer(opts.assumeYes)
 	}
+
 	stats := s.linkMatches(candidates, c, opts)
-	if !stats.stopped {
-		namePairs := append(stats.linkedPairs, differ...)
-		if len(namePairs) > 0 {
-			if s.guard, err = newGuard(s.ctx, append(append([]matched{}, inv.pairs...), stats.linkedPairs...)); err != nil {
-				return fail(err)
-			}
-		}
-		s.syncNames(namePairs, inv.remotes, c, opts, &stats)
+	if stats.stopped {
+		return stats, nil
 	}
+
+	namePairs := slices.Concat(stats.linkedPairs, differ)
+	if len(namePairs) > 0 {
+		g, err := newGuard(s.ctx, slices.Concat(inv.pairs, stats.linkedPairs))
+		if err != nil {
+			return stats, err
+		}
+		s.guard = g
+	}
+	s.syncNames(namePairs, inv.remotes, c, opts, &stats)
+	return stats, nil
+}
+
+func (s *session) fixSummary(candidates int, stats fixStats, opts options) int {
 	printSkipped(s.printer, stats.blocked)
 	if opts.dryRun {
-		s.printer.Line("", "Summary: possible links — %d · names differ — %d", len(candidates), stats.namesDiffer)
+		s.printer.Line("", "Summary: possible links — %d · names differ — %d", candidates, stats.namesDiffer)
 		return ExitOK
 	}
+
 	s.printer.Line("", "Summary: linked — %d · renamed — %d · skipped — %d · errors — %d", stats.linked, stats.renamed, stats.skipped, stats.failed)
 	if stats.failed > 0 || len(stats.blocked) > 0 {
 		return ExitFailure
@@ -158,35 +190,45 @@ func (s *session) localFacts(items []LocalOnly, account []provider.Repo, opts op
 	for _, repo := range account {
 		existing[strings.ToLower(repo.FullName())] = true
 	}
+
+	usable := s.usableLocals(items)
+	out := make([]*localFacts, len(usable))
+	s.pr.setPhase("reading local history")
+	s.pr.setUnit("repositories")
+	s.pr.setTotal(len(usable))
+	parallel(opts.jobs, len(usable), func(i int) {
+		s.pr.begin(shortPath(usable[i].Path))
+		defer s.pr.end()
+		out[i] = s.readLocalFacts(usable[i], existing)
+	})
+	return out
+}
+
+func (s *session) usableLocals(items []LocalOnly) []LocalOnly {
 	usable := make([]LocalOnly, 0, len(items))
 	for _, item := range items {
 		if item.Kind != KindUnreadable && item.Kind != KindNonOrigin && gitcmd.HasCommits(s.ctx, item.Path) {
 			usable = append(usable, item)
 		}
 	}
-	out := make([]*localFacts, len(usable))
-	s.pr.setPhase("reading local history")
-	s.pr.setUnit("repositories")
-	s.pr.setTotal(len(usable))
-	parallel(opts.jobs, len(usable), func(i int) {
-		item := usable[i]
-		s.pr.begin(shortPath(item.Path))
-		defer s.pr.end()
-		facts := &localFacts{item: item, roots: map[string]bool{}, blobs: map[string]string{}}
-		facts.originURL, _ = gitcmd.OriginURL(s.ctx, item.Path)
-		facts.dead = s.deadRemotes(item.Path, existing)
-		facts.commits, _ = gitcmd.AllCommits(s.ctx, item.Path)
-		roots, _ := gitcmd.RootCommits(s.ctx, item.Path)
-		for _, root := range roots {
-			facts.roots[root] = true
-		}
-		blobs, _ := gitcmd.TreeBlobs(s.ctx, item.Path, "HEAD")
-		for _, blob := range blobs {
-			facts.blobs[blob.Path] = blob.SHA
-		}
-		out[i] = facts
-	})
-	return out
+	return usable
+}
+
+func (s *session) readLocalFacts(item LocalOnly, existing map[string]bool) *localFacts {
+	facts := &localFacts{item: item, roots: map[string]bool{}, blobs: map[string]string{}}
+	facts.originURL, _ = gitcmd.OriginURL(s.ctx, item.Path)
+	facts.dead = s.deadRemotes(item.Path, existing)
+	facts.commits, _ = gitcmd.AllCommits(s.ctx, item.Path)
+
+	roots, _ := gitcmd.RootCommits(s.ctx, item.Path)
+	for _, root := range roots {
+		facts.roots[root] = true
+	}
+	blobs, _ := gitcmd.TreeBlobs(s.ctx, item.Path, "HEAD")
+	for _, blob := range blobs {
+		facts.blobs[blob.Path] = blob.SHA
+	}
+	return facts
 }
 
 func (s *session) deadRemotes(dir string, existing map[string]bool) []deadRemote {
@@ -213,15 +255,11 @@ func (s *session) remoteFacts(items []RemoteOnly, opts options) []*remoteFacts {
 	s.pr.setUnit("repositories")
 	s.pr.setTotal(len(items))
 	parallel(opts.jobs, len(items), func(i int) {
-		item := items[i]
-		s.pr.begin(item.FullName)
+		s.pr.begin(items[i].FullName)
 		defer s.pr.end()
-		history, err := s.prov.History(s.ctx, item.repo.Owner, item.repo.Name, item.repo.DefaultBranch)
-		if err != nil {
-			return
-		}
-		all[i] = &remoteFacts{item: item, history: history}
+		all[i] = s.readRemoteFacts(items[i])
 	})
+
 	out := make([]*remoteFacts, 0, len(all))
 	for _, facts := range all {
 		if facts != nil {
@@ -231,19 +269,13 @@ func (s *session) remoteFacts(items []RemoteOnly, opts options) []*remoteFacts {
 	return out
 }
 
-func parallel(jobs, n int, fn func(i int)) {
-	sem := make(chan struct{}, max(jobs, 1))
-	var wg sync.WaitGroup
-	for i := range n {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			fn(i)
-		}()
+func (s *session) readRemoteFacts(item RemoteOnly) *remoteFacts {
+	history, err := s.prov.History(s.ctx, item.repo.Owner, item.repo.Name, item.repo.DefaultBranch)
+	if err != nil {
+		return nil
 	}
-	wg.Wait()
+
+	return &remoteFacts{item: item, history: history}
 }
 
 type localMatches struct {
@@ -252,6 +284,22 @@ type localMatches struct {
 }
 
 func (s *session) findMatches(locals []*localFacts, remotes []*remoteFacts, opts options) []localMatches {
+	byHistory, needFiles := historyMatches(locals, remotes)
+	if needFiles {
+		s.loadTrees(remotes, opts)
+	}
+
+	var out []localMatches
+	for i, local := range locals {
+		if found := orFileMatches(byHistory[i], local, remotes, opts.minSimilarity); len(found) > 0 {
+			out = append(out, s.ranked(local, found))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].local.item.Path < out[j].local.item.Path })
+	return out
+}
+
+func historyMatches(locals []*localFacts, remotes []*remoteFacts) ([][]evidence, bool) {
 	byHistory := make([][]evidence, len(locals))
 	needFiles := false
 	for i, local := range locals {
@@ -260,35 +308,36 @@ func (s *session) findMatches(locals []*localFacts, remotes []*remoteFacts, opts
 				byHistory[i] = append(byHistory[i], ev)
 			}
 		}
-		if len(byHistory[i]) == 0 {
-			needFiles = true
-		}
+		needFiles = needFiles || len(byHistory[i]) == 0
 	}
-	if needFiles {
-		s.loadTrees(remotes, opts)
+	return byHistory, needFiles
+}
+
+func orFileMatches(byHistory []evidence, local *localFacts, remotes []*remoteFacts, minSimilarity float64) []evidence {
+	if len(byHistory) > 0 {
+		return byHistory
 	}
 
-	var out []localMatches
-	for i, local := range locals {
-		found := byHistory[i]
-		if len(found) == 0 {
-			for _, remote := range remotes {
-				if ev := scoreMatch(local, remote); ev.matches(opts.minSimilarity) {
-					found = append(found, ev)
-				}
-			}
+	return fileMatches(local, remotes, minSimilarity)
+}
+
+func fileMatches(local *localFacts, remotes []*remoteFacts, minSimilarity float64) []evidence {
+	var found []evidence
+	for _, remote := range remotes {
+		if ev := scoreMatch(local, remote); ev.matches(minSimilarity) {
+			found = append(found, ev)
 		}
-		if len(found) == 0 {
-			continue
-		}
-		for j := range found {
-			s.measureAhead(local, &found[j])
-		}
-		rankEvidence(found)
-		out = append(out, localMatches{local: local, found: found})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].local.item.Path < out[j].local.item.Path })
-	return out
+	return found
+}
+
+func (s *session) ranked(local *localFacts, found []evidence) localMatches {
+	for j := range found {
+		s.measureAhead(local, &found[j])
+	}
+
+	rankEvidence(found)
+	return localMatches{local: local, found: found}
 }
 
 func (s *session) loadTrees(remotes []*remoteFacts, opts options) {
@@ -315,6 +364,15 @@ func (s *session) measureAhead(local *localFacts, ev *evidence) {
 }
 
 func scoreMatch(local *localFacts, remote *remoteFacts) evidence {
+	ev := historyEvidence(local, remote)
+	if ev.byHistory() || len(remote.tree) == 0 || len(local.blobs) == 0 {
+		return ev
+	}
+
+	return withFileEvidence(ev, local, remote)
+}
+
+func historyEvidence(local *localFacts, remote *remoteFacts) evidence {
 	ev := evidence{
 		remote:      remote,
 		remoteAhead: -1,
@@ -323,6 +381,7 @@ func scoreMatch(local *localFacts, remote *remoteFacts) evidence {
 	if root := remote.history.Root; root.SHA != "" && (local.roots[root.SHA] || local.commits[root.SHA]) {
 		ev.sharedRoot = &root
 	}
+
 	for i, commit := range remote.history.Recent {
 		if !local.commits[commit.SHA] {
 			continue
@@ -332,38 +391,23 @@ func scoreMatch(local *localFacts, remote *remoteFacts) evidence {
 		}
 		ev.shared = append(ev.shared, commit)
 	}
-	if ev.byHistory() || len(remote.tree) == 0 || len(local.blobs) == 0 {
-		return ev
-	}
+	return ev
+}
 
-	localSHAs := map[string]bool{}
-	for _, sha := range local.blobs {
-		localSHAs[sha] = true
-	}
-	remoteSHAs := map[string]bool{}
-	var paths []string
-	for _, entry := range remote.tree {
-		remoteSHAs[entry.SHA] = true
-		if localSHAs[entry.SHA] && local.blobs[entry.Path] == entry.SHA {
-			paths = append(paths, entry.Path)
-		}
-	}
-	common := 0
-	for sha := range remoteSHAs {
-		if localSHAs[sha] {
-			common++
-		}
-	}
+func withFileEvidence(ev evidence, local *localFacts, remote *remoteFacts) evidence {
+	localSHAs := collections.ToSet(slices.Collect(maps.Values(local.blobs)))
+	remoteSHAs := collections.ToSet(collections.Map(remote.tree, treeEntrySHA))
+
+	remoteKeys := collections.SortedKeys(remoteSHAs)
+	common := collections.CountFunc(remoteKeys, func(sha string) bool {
+		return localSHAs[sha]
+	})
 	union := len(localSHAs) + len(remoteSHAs) - common
 	if union == 0 || common == 0 {
 		return ev
 	}
-	sort.Slice(paths, func(i, j int) bool {
-		if di, dj := strings.Count(paths[i], "/"), strings.Count(paths[j], "/"); di != dj {
-			return di < dj
-		}
-		return paths[i] < paths[j]
-	})
+
+	paths := samePaths(local, remote, localSHAs)
 	ev.sameFiles = common
 	ev.totalFiles = union
 	ev.similarity = float64(common) / float64(union)
@@ -371,23 +415,46 @@ func scoreMatch(local *localFacts, remote *remoteFacts) evidence {
 	return ev
 }
 
-func rankEvidence(found []evidence) {
-	sort.SliceStable(found, func(i, j int) bool {
-		a, b := found[i], found[j]
-		if (a.sharedRoot != nil) != (b.sharedRoot != nil) {
-			return a.sharedRoot != nil
-		}
-		if len(a.shared) != len(b.shared) {
-			return len(a.shared) > len(b.shared)
-		}
-		if a.similarity != b.similarity {
-			return a.similarity > b.similarity
-		}
-		if a.sameName != b.sameName {
-			return a.sameName
-		}
-		return a.remote.item.FullName < b.remote.item.FullName
+func treeEntrySHA(entry provider.TreeEntry) string {
+	return entry.SHA
+}
+
+func treeEntryPath(entry provider.TreeEntry) string {
+	return entry.Path
+}
+
+func samePaths(local *localFacts, remote *remoteFacts, localSHAs map[string]bool) []string {
+	same := collections.Filter(remote.tree, func(entry provider.TreeEntry) bool {
+		return localSHAs[entry.SHA] && local.blobs[entry.Path] == entry.SHA
 	})
+	paths := collections.Map(same, treeEntryPath)
+
+	sort.Slice(paths, func(i, j int) bool {
+		if di, dj := strings.Count(paths[i], "/"), strings.Count(paths[j], "/"); di != dj {
+			return di < dj
+		}
+		return paths[i] < paths[j]
+	})
+	return paths
+}
+
+func rankEvidence(found []evidence) {
+	sort.SliceStable(found, func(i, j int) bool { return evidenceLess(found[i], found[j]) })
+}
+
+func evidenceLess(a, b evidence) bool {
+	switch {
+	case (a.sharedRoot != nil) != (b.sharedRoot != nil):
+		return a.sharedRoot != nil
+	case len(a.shared) != len(b.shared):
+		return len(a.shared) > len(b.shared)
+	case a.similarity != b.similarity:
+		return a.similarity > b.similarity
+	case a.sameName != b.sameName:
+		return a.sameName
+	default:
+		return a.remote.item.FullName < b.remote.item.FullName
+	}
 }
 
 func autoPick(found []evidence) (int, bool) {
@@ -405,40 +472,53 @@ type evidenceLine struct {
 	text  string
 }
 
+type evidenceLines []evidenceLine
+
 func renderEvidence(ev evidence) []evidenceLine {
-	var lines []evidenceLine
-	add := func(color, format string, args ...any) {
-		lines = append(lines, evidenceLine{color: color, text: fmt.Sprintf(format, args...)})
-	}
-	history := ev.remote.history
+	var lines evidenceLines
 	if ev.sharedRoot != nil {
-		add(render.Green, "✓ same first commit     %s", commitLine(*ev.sharedRoot))
+		lines.add(render.Green, "✓ same first commit     %s", commitLine(*ev.sharedRoot))
 	}
+
 	switch {
 	case len(ev.shared) > 0:
-		add(render.Green, "✓ %s", sharedSummary(len(ev.shared), len(history.Recent), history.Total))
-		for _, c := range ev.shared[:min(len(ev.shared), sharedCommitsShown)] {
-			add("", "    %s", commitLine(c))
-		}
-		if rest := len(ev.shared) - sharedCommitsShown; rest > 0 {
-			add(render.Grey, "    …and %d more", rest)
-		}
-		if text := aheadSummary(ev); text != "" {
-			add("", "→ %s", text)
-		}
-		add(render.Grey, "why: an identical commit SHA means identical files and identical history up to that commit")
+		lines.addShared(ev)
 	case ev.sharedRoot != nil:
-		add(render.Yellow, "✗ none of the latest %d remote commits are in the local history: the histories diverged long ago", len(history.Recent))
-		add(render.Grey, "why: an identical first commit SHA means both histories grew from the same start")
+		lines.add(render.Yellow, "✗ none of the latest %d remote commits are in the local history: the histories diverged long ago", len(ev.remote.history.Recent))
+		lines.add(render.Grey, "why: an identical first commit SHA means both histories grew from the same start")
 	case ev.sameFiles > 0:
-		add(render.Yellow, "≈ %d%% identical files (%d of %d), no common commits: the history was rewritten or started anew",
-			int(ev.similarity*100+0.5), ev.sameFiles, ev.totalFiles)
-		if len(ev.samplePaths) > 0 {
-			add("", "    same content: %s", strings.Join(ev.samplePaths, ", "))
-		}
-		add(render.Grey, "why: files with identical content hashes on the default branch and in the local HEAD")
+		lines.addFiles(ev)
 	}
 	return lines
+}
+
+func (l *evidenceLines) add(color, format string, args ...any) {
+	*l = append(*l, evidenceLine{color: color, text: fmt.Sprintf(format, args...)})
+}
+
+func (l *evidenceLines) addShared(ev evidence) {
+	history := ev.remote.history
+	l.add(render.Green, "✓ %s", sharedSummary(len(ev.shared), len(history.Recent), history.Total))
+	for _, c := range ev.shared[:min(len(ev.shared), sharedCommitsShown)] {
+		l.add("", "    %s", commitLine(c))
+	}
+	if rest := len(ev.shared) - sharedCommitsShown; rest > 0 {
+		l.add(render.Grey, "    …and %d more", rest)
+	}
+
+	if text := aheadSummary(ev); text != "" {
+		l.add("", "→ %s", text)
+	}
+	l.add(render.Grey, "why: an identical commit SHA means identical files and identical history up to that commit")
+}
+
+func (l *evidenceLines) addFiles(ev evidence) {
+	l.add(render.Yellow, "≈ %d%% identical files (%d of %d), no common commits: the history was rewritten or started anew",
+		int(ev.similarity*100+0.5), ev.sameFiles, ev.totalFiles)
+	if len(ev.samplePaths) > 0 {
+		l.add("", "    same content: %s", strings.Join(ev.samplePaths, ", "))
+	}
+	l.add(render.Grey, "why: files with identical content hashes on the default branch and in the local HEAD")
 }
 
 func sharedSummary(shared, recent, total int) string {
@@ -475,11 +555,15 @@ func plural(n int, word string) string {
 }
 
 func commitLine(c provider.Commit) string {
-	date := "          "
-	if !c.Date.IsZero() {
-		date = c.Date.Local().Format("2006-01-02")
+	return fmt.Sprintf("%s  %s  %s", shortSHA(c.SHA), commitDate(c), render.Ellipsis(c.Subject, 72))
+}
+
+func commitDate(c provider.Commit) string {
+	if c.Date.IsZero() {
+		return "          "
 	}
-	return fmt.Sprintf("%s  %s  %s", shortSHA(c.SHA), date, render.Ellipsis(c.Subject, 72))
+
+	return c.Date.Local().Format("2006-01-02")
 }
 
 func nameNote(ev evidence) string {
@@ -505,85 +589,109 @@ func (s *session) linkMatches(all []localMatches, c *confirmer, opts options) fi
 	var st fixStats
 	used := map[string]bool{}
 	for _, m := range all {
-		found := make([]evidence, 0, len(m.found))
-		for _, ev := range m.found {
-			if !used[ev.remote.item.FullName] {
-				found = append(found, ev)
-			}
-		}
-		if len(found) == 0 {
+		m.found = unusedEvidence(m.found, used)
+		if len(m.found) == 0 {
 			continue
 		}
-		m.found = found
+
 		s.printCandidates(m)
-
 		if opts.dryRun {
-			for _, dead := range m.local.dead {
-				s.printer.Line(render.Grey, "  would offer to remove remote %s: %s does not exist on %s", dead.name, dead.fullName, s.prov.Name())
-			}
-			name := "origin"
-			if m.local.originURL != "" && !m.local.originDead() {
-				name = s.prov.Name() + " (asked)"
-			}
-			s.printer.Line(render.Grey, "  would add remote %s → %s", name, found[0].remote.item.FullName)
-			st.linkedPairs = append(st.linkedPairs, matched{local: scan.Repo{Path: m.local.item.Path}, remote: found[0].remote.item.repo, remoteName: name})
+			s.planLink(m, &st)
 			continue
 		}
-
-		pick, ok := 0, true
-		if opts.assumeYes {
-			if pick, ok = autoPick(found); !ok {
-				s.printer.Line(render.Yellow, "  skipped: ambiguous, run without --yes to choose")
-				st.skipped++
-				continue
-			}
-		} else {
-			idx, ans, err := c.choose(fmt.Sprintf("Link %s with:", shortPath(m.local.item.Path)), len(found))
-			if err != nil {
-				s.printer.Line(render.Red, "  %v", err)
-				st.failed++
-				st.stopped = true
-				return st
-			}
-			switch ans {
-			case answerSkip:
-				st.skipped++
-				continue
-			case answerQuit:
-				s.printer.Line(render.Grey, "Stopped by the user.")
-				st.stopped = true
-				return st
-			}
-			pick = idx
-		}
-
-		remote := found[pick].remote
-		if !s.offerDeadRemoval(m.local, c, opts) {
-			s.printer.Line(render.Grey, "Stopped by the user.")
+		if stop := s.linkOne(m, used, c, opts, &st); stop {
 			st.stopped = true
 			return st
 		}
-		name, overwrite, ans, err := s.remoteNameFor(m.local, c)
-		if err != nil {
-			s.printer.Line(render.Red, "  error: %v", err)
-			st.failed++
-			continue
-		}
-		if ans == answerQuit {
-			s.printer.Line(render.Grey, "Stopped by the user.")
-			st.stopped = true
-			return st
-		}
-		if err := s.addLinkRemote(m.local, remote, name, overwrite); err != nil {
-			s.printer.Line(render.Red, "  error: %v", err)
-			st.failed++
-			continue
-		}
-		used[remote.item.FullName] = true
-		st.linked++
-		st.linkedPairs = append(st.linkedPairs, matched{local: scan.Repo{Path: m.local.item.Path}, remote: remote.item.repo, remoteName: name})
 	}
 	return st
+}
+
+func unusedEvidence(found []evidence, used map[string]bool) []evidence {
+	return collections.Filter(found, func(ev evidence) bool {
+		return !used[ev.remote.item.FullName]
+	})
+}
+
+func (s *session) planLink(m localMatches, st *fixStats) {
+	for _, dead := range m.local.dead {
+		s.printer.Line(render.Grey, "  would offer to remove remote %s: %s does not exist on %s", dead.name, dead.fullName, s.prov.Name())
+	}
+
+	name := s.plannedRemoteName(m.local)
+	s.printer.Line(render.Grey, "  would add remote %s → %s", name, m.found[0].remote.item.FullName)
+	st.linkedPairs = append(st.linkedPairs, linkedPair(m.local, m.found[0].remote, name))
+}
+
+func (s *session) plannedRemoteName(local *localFacts) string {
+	if local.originURL != "" && !local.originDead() {
+		return s.prov.Name() + " (asked)"
+	}
+
+	return "origin"
+}
+
+func linkedPair(local *localFacts, remote *remoteFacts, name string) matched {
+	return matched{local: scan.Repo{Path: local.item.Path}, remote: remote.item.repo, remoteName: name}
+}
+
+func (s *session) linkOne(m localMatches, used map[string]bool, c *confirmer, opts options, st *fixStats) bool {
+	pick, ok, stop := s.pickMatch(m, c, opts, st)
+	if stop || !ok {
+		return stop
+	}
+
+	remote := m.found[pick].remote
+	if !s.offerDeadRemoval(m.local, c, opts) {
+		s.printer.Line(render.Grey, "Stopped by the user.")
+		return true
+	}
+
+	name, overwrite, ans, err := s.remoteNameFor(m.local, c)
+	if err == nil && ans == answerQuit {
+		s.printer.Line(render.Grey, "Stopped by the user.")
+		return true
+	}
+	if err == nil {
+		err = s.addLinkRemote(m.local, remote, name, overwrite)
+	}
+	if err != nil {
+		s.printer.Line(render.Red, "  error: %v", err)
+		st.failed++
+		return false
+	}
+
+	used[remote.item.FullName] = true
+	st.linked++
+	st.linkedPairs = append(st.linkedPairs, linkedPair(m.local, remote, name))
+	return false
+}
+
+func (s *session) pickMatch(m localMatches, c *confirmer, opts options, st *fixStats) (int, bool, bool) {
+	if opts.assumeYes {
+		pick, ok := autoPick(m.found)
+		if !ok {
+			s.printer.Line(render.Yellow, "  skipped: ambiguous, run without --yes to choose")
+			st.skipped++
+		}
+		return pick, ok, false
+	}
+
+	idx, ans, err := c.choose(fmt.Sprintf("Link %s with:", shortPath(m.local.item.Path)), len(m.found))
+	switch {
+	case err != nil:
+		s.printer.Line(render.Red, "  %v", err)
+		st.failed++
+		return 0, false, true
+	case ans == answerSkip:
+		st.skipped++
+		return 0, false, false
+	case ans == answerQuit:
+		s.printer.Line(render.Grey, "Stopped by the user.")
+		return 0, false, true
+	default:
+		return idx, true, false
+	}
 }
 
 func (l *localFacts) originDead() bool {
@@ -650,22 +758,11 @@ func (s *session) remoteNameFor(local *localFacts, c *confirmer) (string, bool, 
 
 func (s *session) addLinkRemote(local *localFacts, remote *remoteFacts, name string, overwrite bool) error {
 	dir := local.item.Path
-	protocol := s.cfg.Protocol
-	if s.opts.protocol == "" && local.originURL != "" {
-		protocol = protocolOf(local.originURL)
+	url := s.prov.RemoteURL(remote.item.repo, s.linkProtocol(local))
+	if err := s.writeLinkRemote(dir, name, url, overwrite); err != nil {
+		return err
 	}
-	url := s.prov.RemoteURL(remote.item.repo, protocol)
-	if overwrite {
-		if err := gitcmd.SetRemote(s.ctx, dir, name, url); err != nil {
-			return err
-		}
-		s.printer.Line(render.Green, "  linked: remote %s overwritten → %s", name, url)
-	} else {
-		if err := gitcmd.AddRemote(s.ctx, dir, name, url); err != nil {
-			return err
-		}
-		s.printer.Line(render.Green, "  linked: remote %s → %s", name, url)
-	}
+
 	branch := remote.item.repo.DefaultBranch
 	if err := gitcmd.Fetch(s.ctx, dir, name, branch); err != nil {
 		s.printer.Line(render.Yellow, "  warning: %v", err)
@@ -676,6 +773,30 @@ func (s *session) addLinkRemote(local *localFacts, remote *remoteFacts, name str
 			s.printer.Line(render.Yellow, "  warning: %v", err)
 		}
 	}
+	return nil
+}
+
+func (s *session) linkProtocol(local *localFacts) string {
+	if s.opts.protocol == "" && local.originURL != "" {
+		return protocolOf(local.originURL)
+	}
+
+	return s.cfg.Protocol
+}
+
+func (s *session) writeLinkRemote(dir, name, url string, overwrite bool) error {
+	if !overwrite {
+		if err := gitcmd.AddRemote(s.ctx, dir, name, url); err != nil {
+			return err
+		}
+		s.printer.Line(render.Green, "  linked: remote %s → %s", name, url)
+		return nil
+	}
+
+	if err := gitcmd.SetRemote(s.ctx, dir, name, url); err != nil {
+		return err
+	}
+	s.printer.Line(render.Green, "  linked: remote %s overwritten → %s", name, url)
 	return nil
 }
 
@@ -692,68 +813,88 @@ func differentNames(pairs []matched) []matched {
 
 func (s *session) syncNames(pairs []matched, account []provider.Repo, c *confirmer, opts options, st *fixStats) {
 	for _, pair := range pairs {
-		localName := filepath.Base(pair.local.Path)
-		if localName == pair.remote.Name {
+		if filepath.Base(pair.local.Path) == pair.remote.Name {
 			continue
 		}
+
 		st.namesDiffer++
-		dir := pair.local.Path
-		if row, blocked := s.guard.check(dir); blocked {
+		if row, blocked := s.guard.check(pair.local.Path); blocked {
 			st.blocked = append(st.blocked, row)
 			st.skipped++
 			continue
 		}
-		target := filepath.Join(filepath.Dir(dir), pair.remote.Name)
-		renamedFull := pair.remote.Owner + "/" + localName
-		p := s.printer
-		p.Line("", "")
-		p.Line(render.Bold, "Names differ: %s  ↔  %s", shortPath(dir), pair.remote.FullName())
-		p.Line("", "  local   %-22s %s → %s", "rename the directory", shortPath(dir), shortPath(target))
-		p.Line("", "  remote  %-22s %s → %s", "rename on "+s.prov.Name(), pair.remote.FullName(), renamedFull)
-		p.Line("", "  keep    leave both names as they are")
-		if opts.dryRun {
-			p.Line(render.Grey, "  would ask which one to rename")
-			continue
-		}
-		if opts.assumeYes {
-			p.Line(render.Yellow, "  kept: run without --yes to choose which one to rename")
+
+		s.printNamesDiffer(pair)
+		switch {
+		case opts.dryRun:
+			s.printer.Line(render.Grey, "  would ask which one to rename")
+		case opts.assumeYes:
+			s.printer.Line(render.Yellow, "  kept: run without --yes to choose which one to rename")
 			st.skipped++
-			continue
-		}
-		for {
-			choice, ok, err := c.option("  Rename which one?", "local", "remote", "keep")
-			if err != nil || !ok {
-				if err != nil {
-					p.Line(render.Red, "  %v", err)
-					st.failed++
-				} else {
-					p.Line(render.Grey, "Stopped by the user.")
-				}
-				st.stopped = true
-				return
-			}
-			if choice == "keep" {
-				st.skipped++
-				break
-			}
-			var renameErr error
-			if choice == "local" {
-				renameErr = s.renameLocalDir(dir, target)
-			} else {
-				renameErr = s.renameRemoteTo(pair, localName, account)
-			}
-			if renameErr == nil {
-				st.renamed++
-				break
-			}
-			p.Line(render.Red, "  error: %v", renameErr)
-			if errors.Is(renameErr, errNameConflict) {
-				continue
-			}
-			st.failed++
-			break
+		case s.chooseRename(pair, account, c, st):
+			st.stopped = true
+			return
 		}
 	}
+}
+
+func (s *session) printNamesDiffer(pair matched) {
+	dir := pair.local.Path
+	target := filepath.Join(filepath.Dir(dir), pair.remote.Name)
+	renamedFull := pair.remote.Owner + "/" + filepath.Base(dir)
+
+	p := s.printer
+	p.Line("", "")
+	p.Line(render.Bold, "Names differ: %s  ↔  %s", shortPath(dir), pair.remote.FullName())
+	p.Line("", "  local   %-22s %s → %s", "rename the directory", shortPath(dir), shortPath(target))
+	p.Line("", "  remote  %-22s %s → %s", "rename on "+s.prov.Name(), pair.remote.FullName(), renamedFull)
+	p.Line("", "  keep    leave both names as they are")
+}
+
+func (s *session) chooseRename(pair matched, account []provider.Repo, c *confirmer, st *fixStats) bool {
+	for {
+		choice, ok, err := c.option("  Rename which one?", "local", "remote", "keep")
+		if err != nil || !ok {
+			s.reportStop(err, st)
+			return true
+		}
+		if choice == "keep" {
+			st.skipped++
+			return false
+		}
+
+		err = s.renameSide(pair, choice, account)
+		switch {
+		case err == nil:
+			st.renamed++
+			return false
+		case errors.Is(err, errNameConflict):
+			s.printer.Line(render.Red, "  error: %v", err)
+		default:
+			s.printer.Line(render.Red, "  error: %v", err)
+			st.failed++
+			return false
+		}
+	}
+}
+
+func (s *session) reportStop(err error, st *fixStats) {
+	if err != nil {
+		s.printer.Line(render.Red, "  %v", err)
+		st.failed++
+		return
+	}
+
+	s.printer.Line(render.Grey, "Stopped by the user.")
+}
+
+func (s *session) renameSide(pair matched, choice string, account []provider.Repo) error {
+	dir := pair.local.Path
+	if choice == "local" {
+		return s.renameLocalDir(dir, filepath.Join(filepath.Dir(dir), pair.remote.Name))
+	}
+
+	return s.renameRemoteTo(pair, filepath.Base(dir), account)
 }
 
 var errNameConflict = errors.New("name conflict")
@@ -780,10 +921,7 @@ func (s *session) renameRemoteTo(pair matched, newName string, account []provide
 	}
 	dir := pair.local.Path
 	currentURL, _ := gitcmd.RemoteURL(s.ctx, dir, pair.gitRemote())
-	protocol := s.cfg.Protocol
-	if currentURL != "" {
-		protocol = protocolOf(currentURL)
-	}
+	protocol := remoteProtocol(currentURL, s.cfg.Protocol)
 	renamed, err := s.prov.RenameRepo(s.ctx, pair.remote.Owner, pair.remote.Name, newName)
 	if err != nil {
 		if errors.Is(err, provider.ErrExists) {
