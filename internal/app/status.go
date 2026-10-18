@@ -58,6 +58,10 @@ func statusFlags(opts *options) *flag.FlagSet {
 	return fs
 }
 
+type statusSummary struct {
+	shown, features, dirty, failed int
+}
+
 func runStatus(args []string) int {
 	opts := options{}
 	fs := statusFlags(&opts)
