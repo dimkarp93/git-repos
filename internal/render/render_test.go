@@ -32,11 +32,14 @@ func TestAgeColorThresholds(t *testing.T) {
 
 func TestFetchAgeNever(t *testing.T) {
 	text, color := FetchAge(time.Time{}, false)
-	if text != "never" || color != Red {
-		t.Fatalf("FetchAge = %q, %q", text, color)
-	}
-	text, _ = FetchAge(time.Now().Add(-50*time.Hour), true)
-	require.Equal(t, "2d ago", text, "FetchAge = %q", text)
+
+	assert.Equal(t, []string{"never", Red}, []string{text, color})
+}
+
+func TestFetchAgeKnown(t *testing.T) {
+	text, _ := FetchAge(time.Now().Add(-50*time.Hour), true)
+
+	assert.Equal(t, "2d ago", text)
 }
 
 func TestTableAlignsColumnsWithoutColor(t *testing.T) {
@@ -46,17 +49,16 @@ func TestTableAlignsColumnsWithoutColor(t *testing.T) {
 		{{Text: "long-value"}, {Text: "x"}},
 		{{Text: "s"}, {Text: "y"}},
 	})
-	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-	require.Len(t, lines, 6, "lines = %q", lines)
-	if lines[0] != "┌────────────┬───┐" || lines[1] != "│ A          │ B │" {
-		t.Fatalf("lines = %q", lines)
+
+	want := []string{
+		"┌────────────┬───┐",
+		"│ A          │ B │",
+		"├────────────┼───┤",
+		"│ long-value │ x │",
+		"│ s          │ y │",
+		"└────────────┴───┘",
 	}
-	if lines[3] != "│ long-value │ x │" || lines[4] != "│ s          │ y │" {
-		t.Fatalf("lines = %q", lines)
-	}
-	if lines[5] != "└────────────┴───┘" {
-		t.Fatalf("lines = %q", lines)
-	}
+	assert.Equal(t, want, strings.Split(strings.TrimRight(buf.String(), "\n"), "\n"))
 }
 
 func TestTableColorsCells(t *testing.T) {

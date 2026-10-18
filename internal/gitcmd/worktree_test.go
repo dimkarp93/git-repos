@@ -101,88 +101,116 @@ func TestVersionAtLeast(t *testing.T) {
 
 func TestGitVersion(t *testing.T) {
 	v, err := GitVersion(context.Background())
+
 	require.NoError(t, err)
-	if v.Major < 2 {
-		t.Errorf("GitVersion major = %d, want >= 2 (%+v)", v.Major, v)
-	}
+	assert.GreaterOrEqual(t, v.Major, 2)
+}
+
+func linkedWorktree(t *testing.T, wtName string, args ...string) (string, string, []Worktree) {
+	t.Helper()
+
+	repo := newRepo(t)
+	wt := filepath.Join(t.TempDir(), wtName)
+	runGit(t, repo, append(append([]string{"worktree", "add"}, args...), wt)...)
+
+	list := mustWorktrees(t, repo)
+	require.Len(t, list, 2)
+	return repo, wt, list
+}
+
+type worktreeView struct {
+	Branch                           string
+	Detached, Prunable, Locked, Bare bool
+}
+
+func viewOf(w Worktree) worktreeView {
+	return worktreeView{Branch: w.Branch, Detached: w.Detached, Prunable: w.Prunable, Locked: w.Locked, Bare: w.Bare}
 }
 
 func TestWorktreesMainAndLinkedBranch(t *testing.T) {
-	repo := newRepo(t)
-	wt := filepath.Join(t.TempDir(), "wt")
-	runGit(t, repo, "worktree", "add", "-b", "feature", wt)
+	repo, wt, list := linkedWorktree(t, "wt", "-b", "feature")
 
-	list := mustWorktrees(t, repo)
-	require.Len(t, list, 2, "len = %d, want 2: %+v", len(list), list)
-	assertSamePath(t, list[0].Path, repo)
-	if list[0].Branch != "main" || list[0].Detached {
-		t.Errorf("main = %+v, want branch main, not detached", list[0])
-	}
-	if want := runGit(t, repo, "rev-parse", "HEAD"); list[0].Head != want {
-		t.Errorf("main Head = %q, want %q", list[0].Head, want)
-	}
-	assertSamePath(t, list[1].Path, wt)
-	if list[1].Branch != "feature" || list[1].Detached {
-		t.Errorf("linked = %+v, want branch feature, not detached", list[1])
-	}
-	if list[1].Prunable || list[1].Locked || list[1].Bare {
-		t.Errorf("linked flags = %+v, want none set", list[1])
-	}
+	t.Run("main path", func(t *testing.T) {
+		assertSamePath(t, list[0].Path, repo)
+	})
+	t.Run("main state", func(t *testing.T) {
+		assert.Equal(t, worktreeView{Branch: "main"}, viewOf(list[0]))
+	})
+	t.Run("main head", func(t *testing.T) {
+		assert.Equal(t, runGit(t, repo, "rev-parse", "HEAD"), list[0].Head)
+	})
+	t.Run("linked path", func(t *testing.T) {
+		assertSamePath(t, list[1].Path, wt)
+	})
+	t.Run("linked state", func(t *testing.T) {
+		assert.Equal(t, worktreeView{Branch: "feature"}, viewOf(list[1]))
+	})
 }
 
 func TestWorktreesDetached(t *testing.T) {
-	repo := newRepo(t)
-	wt := filepath.Join(t.TempDir(), "wt")
-	runGit(t, repo, "worktree", "add", "--detach", wt)
+	repo, wt, list := linkedWorktree(t, "wt", "--detach")
 
-	list := mustWorktrees(t, repo)
-	require.Len(t, list, 2, "len = %d, want 2: %+v", len(list), list)
-	assertSamePath(t, list[1].Path, wt)
-	assert.True(t, list[1].Detached, "Detached = false, want true: %+v", list[1])
-	assert.Equal(t, "", list[1].Branch, "Branch = %q, want empty", list[1].Branch)
-	if want := runGit(t, repo, "rev-parse", "HEAD"); list[1].Head != want {
-		t.Errorf("Head = %q, want %q", list[1].Head, want)
+	t.Run("path", func(t *testing.T) {
+		assertSamePath(t, list[1].Path, wt)
+	})
+	t.Run("state", func(t *testing.T) {
+		assert.Equal(t, worktreeView{Detached: true}, viewOf(list[1]))
+	})
+	t.Run("head", func(t *testing.T) {
+		assert.Equal(t, runGit(t, repo, "rev-parse", "HEAD"), list[1].Head)
+	})
+}
+
+func requireGit(t *testing.T, major, minor int) {
+	t.Helper()
+
+	v, err := GitVersion(context.Background())
+	require.NoError(t, err)
+	if !v.AtLeast(major, minor) {
+		t.Skipf("git %+v is older than %d.%d", v, major, minor)
 	}
 }
 
 func TestWorktreesPrunable(t *testing.T) {
-	v, err := GitVersion(context.Background())
-	require.NoError(t, err)
-	if !v.AtLeast(2, 31) {
-		t.Skipf("git %+v is older than 2.31", v)
-	}
+	requireGit(t, 2, 31)
 	repo := newRepo(t)
 	wt := filepath.Join(t.TempDir(), "wt")
 	runGit(t, repo, "worktree", "add", "-b", "gone", wt)
 	require.NoError(t, os.RemoveAll(wt))
 
 	list := mustWorktrees(t, repo)
-	require.Len(t, list, 2, "len = %d, want 2: %+v", len(list), list)
-	assert.True(t, list[1].Prunable, "Prunable = false, want true: %+v", list[1])
-	assert.Equal(t, "gone", list[1].Branch, "Branch = %q, want gone", list[1].Branch)
+
+	require.Len(t, list, 2)
+	assert.Equal(t, worktreeView{Branch: "gone", Prunable: true}, viewOf(list[1]))
 }
 
 func TestWorktreesLocked(t *testing.T) {
-	repo := newRepo(t)
-	wt := filepath.Join(t.TempDir(), "wt")
-	runGit(t, repo, "worktree", "add", "-b", "locked-branch", wt)
+	repo, wt, _ := linkedWorktree(t, "wt", "-b", "locked-branch")
 	runGit(t, repo, "worktree", "lock", wt)
 
 	list := mustWorktrees(t, repo)
-	require.Len(t, list, 2, "len = %d, want 2: %+v", len(list), list)
-	assert.True(t, list[1].Locked, "Locked = false, want true: %+v", list[1])
-	if list[1].Prunable {
-		t.Errorf("Prunable = true, want false: %+v", list[1])
-	}
+
+	require.Len(t, list, 2)
+	assert.Equal(t, worktreeView{Branch: "locked-branch", Locked: true}, viewOf(list[1]))
 }
 
 func TestWorktreesPathWithSpace(t *testing.T) {
-	repo := newRepo(t)
-	wt := filepath.Join(t.TempDir(), "my worktree dir")
-	runGit(t, repo, "worktree", "add", "-b", "spaced", wt)
+	_, wt, list := linkedWorktree(t, "my worktree dir", "-b", "spaced")
 
-	list := mustWorktrees(t, repo)
-	require.Len(t, list, 2, "len = %d, want 2: %+v", len(list), list)
-	assertSamePath(t, list[1].Path, wt)
-	assert.Equal(t, "spaced", list[1].Branch, "Branch = %q, want spaced", list[1].Branch)
+	t.Run("path", func(t *testing.T) {
+		assertSamePath(t, list[1].Path, wt)
+	})
+	t.Run("branch", func(t *testing.T) {
+		assert.Equal(t, "spaced", list[1].Branch)
+	})
+}
+
+func TestParseWorktrees(t *testing.T) {
+	out := "HEAD ignored\nworktree /r\nHEAD aaa\nbranch refs/heads/main\r\n\nworktree /b\nbare\nlocked\nprunable gone\n"
+
+	want := []Worktree{
+		{Path: "/r", Head: "aaa", Branch: "main"},
+		{Path: "/b", Bare: true, Locked: true, Prunable: true},
+	}
+	assert.Equal(t, want, parseWorktrees(out))
 }
