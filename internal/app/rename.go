@@ -28,22 +28,9 @@ func renameFlags(opts *options) *flag.FlagSet {
 }
 
 func runRename(args []string) int {
-	opts := options{}
-	fs := renameFlags(&opts)
-	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return ExitOK
-		}
-		return ExitFailure
-	}
-	rest := fs.Args()
-	if len(rest) != 0 && len(rest) != 2 {
-		fmt.Fprintln(os.Stderr, "git-repos: rename takes either no arguments or <old-name> <new-name>")
-		return ExitFailure
-	}
-	interactive := len(rest) == 0
-	if interactive && !(render.IsTerminal(os.Stdin) && render.IsTerminal(os.Stdout)) {
-		return fail(errors.New("no terminal for the interactive mode, use: git-repos rename <old-name> <new-name>"))
+	opts, rest, code, ok := parseRename(args)
+	if !ok {
+		return code
 	}
 
 	s, err := start(opts)
@@ -60,36 +47,9 @@ func runRename(args []string) int {
 		return fail(err)
 	}
 
-	var pair matched
-	var newName string
-	if interactive {
-		candidates := renameCandidates(s.ctx, inv)
-		if len(candidates) == 0 {
-			s.printer.Line(render.Grey, "No repositories that exist both locally and on %s.", s.prov.Name())
-			return ExitOK
-		}
-		oldName, chosen, cancelled, err := pickRename(candidates, inv)
-		if err != nil {
-			return fail(err)
-		}
-		if cancelled {
-			s.printer.Line("", "Operation cancelled")
-			return ExitOK
-		}
-		pair, err = findRenamePair(inv, oldName)
-		if err != nil {
-			return fail(err)
-		}
-		newName = chosen
-	} else {
-		pair, err = findRenamePair(inv, rest[0])
-		if err != nil {
-			return fail(err)
-		}
-		if err := checkNewName(inv, pair, rest[1]); err != nil {
-			return fail(err)
-		}
-		newName = rest[1]
+	pair, newName, code, ok := s.renameTarget(inv, rest)
+	if !ok {
+		return code
 	}
 
 	g, err := newGuard(s.ctx, inv.pairs)
@@ -105,6 +65,62 @@ func runRename(args []string) int {
 		return fail(err)
 	}
 	return ExitOK
+}
+
+func parseRename(args []string) (options, []string, int, bool) {
+	opts := options{}
+	fs := renameFlags(&opts)
+	if err := fs.Parse(args); err != nil {
+		return opts, nil, parseExit(err), false
+	}
+
+	rest := fs.Args()
+	if len(rest) != 0 && len(rest) != 2 {
+		fmt.Fprintln(os.Stderr, "git-repos: rename takes either no arguments or <old-name> <new-name>")
+		return opts, nil, ExitFailure, false
+	}
+	if len(rest) == 0 && !(render.IsTerminal(os.Stdin) && render.IsTerminal(os.Stdout)) {
+		return opts, nil, fail(errors.New("no terminal for the interactive mode, use: git-repos rename <old-name> <new-name>")), false
+	}
+	return opts, rest, ExitOK, true
+}
+
+func (s *session) renameTarget(inv inventory, rest []string) (matched, string, int, bool) {
+	if len(rest) == 0 {
+		return s.pickRenameTarget(inv)
+	}
+
+	pair, err := findRenamePair(inv, rest[0])
+	if err == nil {
+		err = checkNewName(inv, pair, rest[1])
+	}
+	if err != nil {
+		return matched{}, "", fail(err), false
+	}
+	return pair, rest[1], ExitOK, true
+}
+
+func (s *session) pickRenameTarget(inv inventory) (matched, string, int, bool) {
+	candidates := renameCandidates(s.ctx, inv)
+	if len(candidates) == 0 {
+		s.printer.Line(render.Grey, "No repositories that exist both locally and on %s.", s.prov.Name())
+		return matched{}, "", ExitOK, false
+	}
+
+	oldName, newName, cancelled, err := pickRename(candidates, inv)
+	if err != nil {
+		return matched{}, "", fail(err), false
+	}
+	if cancelled {
+		s.printer.Line("", "Operation cancelled")
+		return matched{}, "", ExitOK, false
+	}
+
+	pair, err := findRenamePair(inv, oldName)
+	if err != nil {
+		return matched{}, "", fail(err), false
+	}
+	return pair, newName, ExitOK, true
 }
 
 func validateRepoName(name string) error {
@@ -125,38 +141,61 @@ func validateRepoName(name string) error {
 }
 
 func findRenamePair(inv inventory, oldName string) (matched, error) {
-	var locals []string
-	for _, local := range inv.locals {
-		if strings.EqualFold(filepath.Base(local.Path), oldName) {
-			locals = append(locals, local.Path)
-		}
+	locals := localsNamed(inv, oldName)
+	remotes := remotesNamed(inv, oldName)
+	if err := uniqueRenamePair(oldName, locals, remotes); err != nil {
+		return matched{}, err
 	}
-	var remotes []provider.Repo
-	for _, repo := range inv.remotes {
-		if strings.EqualFold(repo.Name, oldName) {
-			remotes = append(remotes, repo)
-		}
-	}
-	switch {
-	case len(locals) == 0:
-		return matched{}, fmt.Errorf("no local repository named %q", oldName)
-	case len(locals) > 1:
-		return matched{}, fmt.Errorf("%d local repositories named %q: %s", len(locals), oldName, joinShort(locals))
-	case len(remotes) == 0:
-		return matched{}, fmt.Errorf("no remote repository named %q", oldName)
-	case len(remotes) > 1:
-		names := make([]string, len(remotes))
-		for i, repo := range remotes {
-			names[i] = repo.FullName()
-		}
-		return matched{}, fmt.Errorf("%d remote repositories named %q: %s", len(remotes), oldName, strings.Join(names, ", "))
-	}
+
 	for _, pair := range inv.pairs {
 		if pair.local.Path == locals[0] && strings.EqualFold(pair.remote.FullName(), remotes[0].FullName()) {
 			return pair, nil
 		}
 	}
 	return matched{}, fmt.Errorf("%s is not linked to %s through origin", shortPath(locals[0]), remotes[0].FullName())
+}
+
+func localsNamed(inv inventory, name string) []string {
+	var out []string
+	for _, local := range inv.locals {
+		if strings.EqualFold(filepath.Base(local.Path), name) {
+			out = append(out, local.Path)
+		}
+	}
+	return out
+}
+
+func remotesNamed(inv inventory, name string) []provider.Repo {
+	var out []provider.Repo
+	for _, repo := range inv.remotes {
+		if strings.EqualFold(repo.Name, name) {
+			out = append(out, repo)
+		}
+	}
+	return out
+}
+
+func uniqueRenamePair(name string, locals []string, remotes []provider.Repo) error {
+	switch {
+	case len(locals) == 0:
+		return fmt.Errorf("no local repository named %q", name)
+	case len(locals) > 1:
+		return fmt.Errorf("%d local repositories named %q: %s", len(locals), name, joinShort(locals))
+	case len(remotes) == 0:
+		return fmt.Errorf("no remote repository named %q", name)
+	case len(remotes) > 1:
+		return fmt.Errorf("%d remote repositories named %q: %s", len(remotes), name, joinFullNames(remotes))
+	default:
+		return nil
+	}
+}
+
+func joinFullNames(repos []provider.Repo) string {
+	names := make([]string, len(repos))
+	for i, repo := range repos {
+		names[i] = repo.FullName()
+	}
+	return strings.Join(names, ", ")
 }
 
 func joinShort(paths []string) string {
@@ -194,33 +233,36 @@ type renameCandidate struct {
 }
 
 func renameCandidates(ctx context.Context, inv inventory) []renameCandidate {
-	localCount := map[string]int{}
-	for _, local := range inv.locals {
-		localCount[strings.ToLower(filepath.Base(local.Path))]++
-	}
-	remoteCount := map[string]int{}
-	for _, repo := range inv.remotes {
-		remoteCount[strings.ToLower(repo.Name)]++
-	}
+	localCount, remoteCount := nameCounts(inv)
 	var out []renameCandidate
 	for _, pair := range inv.pairs {
 		base := filepath.Base(pair.local.Path)
 		key := strings.ToLower(base)
-		if base != pair.remote.Name || localCount[key] != 1 || remoteCount[key] != 1 {
-			continue
+		if base == pair.remote.Name && localCount[key] == 1 && remoteCount[key] == 1 {
+			out = append(out, renameCandidate{name: base, activity: gitcmd.LastActivity(ctx, pair.local.Path)})
 		}
-		out = append(out, renameCandidate{name: base, activity: gitcmd.LastActivity(ctx, pair.local.Path)})
 	}
+
 	sort.Slice(out, func(i, j int) bool {
 		if !out[i].activity.Equal(out[j].activity) {
 			return out[i].activity.After(out[j].activity)
 		}
 		return out[i].name < out[j].name
 	})
-	if len(out) > maxRenameCandidates {
-		out = out[:maxRenameCandidates]
+	return out[:min(len(out), maxRenameCandidates)]
+}
+
+func nameCounts(inv inventory) (map[string]int, map[string]int) {
+	localCount := map[string]int{}
+	for _, local := range inv.locals {
+		localCount[strings.ToLower(filepath.Base(local.Path))]++
 	}
-	return out
+
+	remoteCount := map[string]int{}
+	for _, repo := range inv.remotes {
+		remoteCount[strings.ToLower(repo.Name)]++
+	}
+	return localCount, remoteCount
 }
 
 func pickRename(candidates []renameCandidate, inv inventory) (oldName, newName string, cancelled bool, err error) {
@@ -246,6 +288,14 @@ func pickRename(candidates []renameCandidate, inv inventory) (oldName, newName s
 	return p.Run(terminal.StdinKeys(os.Stdin), terminal.NewScreen(os.Stdout))
 }
 
+func remoteProtocol(originURL, fallback string) string {
+	if originURL != "" {
+		return protocolOf(originURL)
+	}
+
+	return fallback
+}
+
 func protocolOf(originURL string) string {
 	if strings.HasPrefix(originURL, "https://") || strings.HasPrefix(originURL, "http://") {
 		return provider.ProtocolHTTPS
@@ -260,10 +310,7 @@ func (s *session) executeRename(pair matched, newName string) error {
 	if err != nil {
 		return err
 	}
-	protocol := s.cfg.Protocol
-	if originURL != "" {
-		protocol = protocolOf(originURL)
-	}
+	protocol := remoteProtocol(originURL, s.cfg.Protocol)
 
 	renamed, err := s.prov.RenameRepo(s.ctx, pair.remote.Owner, pair.remote.Name, newName)
 	if err != nil {

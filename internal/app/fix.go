@@ -764,10 +764,7 @@ func (s *session) renameRemoteTo(pair matched, newName string, account []provide
 	}
 	dir := pair.local.Path
 	currentURL, _ := gitcmd.RemoteURL(s.ctx, dir, pair.gitRemote())
-	protocol := s.cfg.Protocol
-	if currentURL != "" {
-		protocol = protocolOf(currentURL)
-	}
+	protocol := remoteProtocol(currentURL, s.cfg.Protocol)
 	renamed, err := s.prov.RenameRepo(s.ctx, pair.remote.Owner, pair.remote.Name, newName)
 	if err != nil {
 		if errors.Is(err, provider.ErrExists) {
