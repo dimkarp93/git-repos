@@ -7,11 +7,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/dimkarp93/git-repos/internal/render"
 	"github.com/dimkarp93/git-repos/internal/scan"
+	"github.com/dimkarp93/utils/pkg/collections"
 )
 
 func doFlags(opts *options) *flag.FlagSet {
@@ -177,114 +178,83 @@ type dirSet struct {
 }
 
 func selectRepos(s *session, opts options) ([]string, error) {
-	set := &dirSet{seen: map[string]bool{}}
+	var dirs []string
 	var err error
 	if opts.filters.anyView() {
-		err = providerTargets(s, opts, set)
+		dirs, err = providerDirs(s, opts)
 	} else {
-		err = localTargets(s, opts, set)
+		dirs, err = localDirs(s, opts)
 	}
 	if err != nil {
 		return nil, err
 	}
 
-	sort.Strings(set.out)
-	return set.out, nil
+	return collections.SortedUnique(collections.Filter(dirs, isSetDir)), nil
 }
 
-func (d *dirSet) add(dir string) {
-	if dir == "" || d.seen[dir] {
-		return
-	}
-
-	d.seen[dir] = true
-	d.out = append(d.out, dir)
+func isSetDir(dir string) bool {
+	return dir != ""
 }
 
-func (d *dirSet) addStatus(s *session, locals []scan.Repo, opts options) {
-	for _, res := range statusAll(s.ctx, locals, opts, s.pr) {
-		if opts.filters.matchStatus(res) {
-			d.add(res.dir)
-		}
-	}
+func statusDirs(s *session, locals []scan.Repo, opts options) []string {
+	results := statusAll(s.ctx, locals, opts, s.pr)
+	matching := collections.Filter(results, opts.filters.matchStatus)
+	return collections.Map(matching, statusResultDir)
 }
 
-func localTargets(s *session, opts options, set *dirSet) error {
+func localDirs(s *session, opts options) ([]string, error) {
 	locals, err := scanLocal(s.cfg, opts, s.roots, s.pr, s.store)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if opts.filters.anyStatus() {
-		set.addStatus(s, locals, opts)
-		return nil
+		return statusDirs(s, locals, opts), nil
 	}
-	for _, local := range locals {
-		set.add(local.Path)
-	}
-	return nil
+	return collections.Map(locals, repoPath), nil
 }
 
-func providerTargets(s *session, opts options, set *dirSet) error {
+func providerDirs(s *session, opts options) ([]string, error) {
 	pairs, inv, err := collect(s.ctx, s.prov, s.store, s.cfg, s.roots, opts, s.pr)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	if opts.filters.local {
-		for _, item := range inv.localOnly {
-			set.add(item.Path)
-		}
-	}
 	if opts.filters.remote && len(inv.remoteOnly) > 0 {
 		fmt.Fprintf(os.Stderr, "git-repos: %d repositories exist only on the remote with no local copy — skipped\n", len(inv.remoteOnly))
 	}
 
-	for _, res := range inspectAll(s.ctx, s.prov, s.store, pairs, opts, s.pr) {
-		if opts.filters.matchResult(res) {
-			set.add(res.dir)
-		}
+	results := inspectAll(s.ctx, s.prov, s.store, pairs, opts, s.pr)
+	matching := collections.Filter(results, opts.filters.matchResult)
+	dirs := slices.Concat(localOnlyDirs(inv, opts), collections.Map(matching, inspectResultDir))
+	if !opts.filters.anyStatus() {
+		return dirs, nil
 	}
-	if opts.filters.anyStatus() {
-		set.addStatus(s, inv.locals, opts)
-	}
-	return nil
-}
-
-func isSetDir(dir string) bool {
-	panic("not implemented")
-}
-
-func statusDirs(s *session, locals []scan.Repo, opts options) []string {
-	panic("not implemented")
-}
-
-func localDirs(s *session, opts options) ([]string, error) {
-	panic("not implemented")
-}
-
-func providerDirs(s *session, opts options) ([]string, error) {
-	panic("not implemented")
+	return slices.Concat(dirs, statusDirs(s, inv.locals, opts)), nil
 }
 
 func localOnlyDirs(inv inventory, opts options) []string {
-	panic("not implemented")
+	if !opts.filters.local {
+		return nil
+	}
+
+	return collections.Map(inv.localOnly, localOnlyPath)
 }
 
 func repoPath(local scan.Repo) string {
-	panic("not implemented")
+	return local.Path
 }
 
 func localOnlyPath(item LocalOnly) string {
-	panic("not implemented")
+	return item.Path
 }
 
 func statusResultDir(res statusResult) string {
-	panic("not implemented")
+	return res.dir
 }
 
 func inspectResultDir(res Result) string {
-	panic("not implemented")
+	return res.dir
 }
 
 func startFor(opts options, needProvider bool) (*session, error) {

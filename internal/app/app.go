@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -18,6 +17,7 @@ import (
 	"github.com/dimkarp93/git-repos/internal/provider"
 	"github.com/dimkarp93/git-repos/internal/provider/github"
 	"github.com/dimkarp93/git-repos/internal/render"
+	"github.com/dimkarp93/utils/pkg/collections"
 )
 
 const (
@@ -343,21 +343,13 @@ func resolveRoots(flagRoots, configRoots []string) ([]string, error) {
 		return nil, err
 	}
 
-	out := make([]string, 0, len(roots))
-	seen := map[string]bool{}
-	for _, root := range roots {
-		root = config.ExpandPath(root)
-		if root == "" || seen[root] {
-			continue
-		}
+	expanded := collections.Map(roots, config.ExpandPath)
+	out := collections.SortedUnique(collections.Filter(expanded, isSetDir))
+	for _, root := range out {
 		if _, err := os.Stat(root); err != nil {
 			return nil, fmt.Errorf("root %s: %w", root, err)
 		}
-		seen[root] = true
-		out = append(out, root)
 	}
-
-	sort.Strings(out)
 	return out, nil
 }
 
