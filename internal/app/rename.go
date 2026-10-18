@@ -14,7 +14,9 @@ import (
 	"github.com/dimkarp93/git-repos/internal/gitcmd"
 	"github.com/dimkarp93/git-repos/internal/provider"
 	"github.com/dimkarp93/git-repos/internal/render"
+	"github.com/dimkarp93/git-repos/internal/scan"
 	"github.com/dimkarp93/git-repos/internal/terminal"
+	"github.com/dimkarp93/utils/pkg/collections"
 )
 
 const (
@@ -156,23 +158,16 @@ func findRenamePair(inv inventory, oldName string) (matched, error) {
 }
 
 func localsNamed(inv inventory, name string) []string {
-	var out []string
-	for _, local := range inv.locals {
-		if strings.EqualFold(filepath.Base(local.Path), name) {
-			out = append(out, local.Path)
-		}
-	}
-	return out
+	named := collections.Filter(inv.locals, func(local scan.Repo) bool {
+		return strings.EqualFold(filepath.Base(local.Path), name)
+	})
+	return collections.Map(named, repoPath)
 }
 
 func remotesNamed(inv inventory, name string) []provider.Repo {
-	var out []provider.Repo
-	for _, repo := range inv.remotes {
-		if strings.EqualFold(repo.Name, name) {
-			out = append(out, repo)
-		}
-	}
-	return out
+	return collections.Filter(inv.remotes, func(repo provider.Repo) bool {
+		return strings.EqualFold(repo.Name, name)
+	})
 }
 
 func uniqueRenamePair(name string, locals []string, remotes []provider.Repo) error {
@@ -191,19 +186,11 @@ func uniqueRenamePair(name string, locals []string, remotes []provider.Repo) err
 }
 
 func joinFullNames(repos []provider.Repo) string {
-	names := make([]string, len(repos))
-	for i, repo := range repos {
-		names[i] = repo.FullName()
-	}
-	return strings.Join(names, ", ")
+	return strings.Join(collections.Map(repos, provider.Repo.FullName), ", ")
 }
 
 func joinShort(paths []string) string {
-	out := make([]string, len(paths))
-	for i, path := range paths {
-		out[i] = shortPath(path)
-	}
-	return strings.Join(out, ", ")
+	return strings.Join(collections.Map(paths, shortPath), ", ")
 }
 
 func checkNewName(inv inventory, pair matched, newName string) error {
@@ -253,23 +240,21 @@ func renameCandidates(ctx context.Context, inv inventory) []renameCandidate {
 }
 
 func nameCounts(inv inventory) (map[string]int, map[string]int) {
-	localCount := map[string]int{}
-	for _, local := range inv.locals {
-		localCount[strings.ToLower(filepath.Base(local.Path))]++
-	}
-
-	remoteCount := map[string]int{}
-	for _, repo := range inv.remotes {
-		remoteCount[strings.ToLower(repo.Name)]++
-	}
+	localCount := collections.CountBy(inv.locals, func(local scan.Repo) string {
+		return strings.ToLower(filepath.Base(local.Path))
+	})
+	remoteCount := collections.CountBy(inv.remotes, func(repo provider.Repo) string {
+		return strings.ToLower(repo.Name)
+	})
 	return localCount, remoteCount
 }
 
+func candidateName(c renameCandidate) string {
+	return c.name
+}
+
 func pickRename(candidates []renameCandidate, inv inventory) (oldName, newName string, cancelled bool, err error) {
-	names := make([]string, len(candidates))
-	for i, c := range candidates {
-		names[i] = c.name
-	}
+	names := collections.Map(candidates, candidateName)
 	p := terminal.NewPicker(names, func(oldName, newName string) error {
 		pair, err := findRenamePair(inv, oldName)
 		if err != nil {
