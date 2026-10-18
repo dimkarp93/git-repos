@@ -782,68 +782,88 @@ func differentNames(pairs []matched) []matched {
 
 func (s *session) syncNames(pairs []matched, account []provider.Repo, c *confirmer, opts options, st *fixStats) {
 	for _, pair := range pairs {
-		localName := filepath.Base(pair.local.Path)
-		if localName == pair.remote.Name {
+		if filepath.Base(pair.local.Path) == pair.remote.Name {
 			continue
 		}
+
 		st.namesDiffer++
-		dir := pair.local.Path
-		if row, blocked := s.guard.check(dir); blocked {
+		if row, blocked := s.guard.check(pair.local.Path); blocked {
 			st.blocked = append(st.blocked, row)
 			st.skipped++
 			continue
 		}
-		target := filepath.Join(filepath.Dir(dir), pair.remote.Name)
-		renamedFull := pair.remote.Owner + "/" + localName
-		p := s.printer
-		p.Line("", "")
-		p.Line(render.Bold, "Names differ: %s  ↔  %s", shortPath(dir), pair.remote.FullName())
-		p.Line("", "  local   %-22s %s → %s", "rename the directory", shortPath(dir), shortPath(target))
-		p.Line("", "  remote  %-22s %s → %s", "rename on "+s.prov.Name(), pair.remote.FullName(), renamedFull)
-		p.Line("", "  keep    leave both names as they are")
-		if opts.dryRun {
-			p.Line(render.Grey, "  would ask which one to rename")
-			continue
-		}
-		if opts.assumeYes {
-			p.Line(render.Yellow, "  kept: run without --yes to choose which one to rename")
+
+		s.printNamesDiffer(pair)
+		switch {
+		case opts.dryRun:
+			s.printer.Line(render.Grey, "  would ask which one to rename")
+		case opts.assumeYes:
+			s.printer.Line(render.Yellow, "  kept: run without --yes to choose which one to rename")
 			st.skipped++
-			continue
-		}
-		for {
-			choice, ok, err := c.option("  Rename which one?", "local", "remote", "keep")
-			if err != nil || !ok {
-				if err != nil {
-					p.Line(render.Red, "  %v", err)
-					st.failed++
-				} else {
-					p.Line(render.Grey, "Stopped by the user.")
-				}
-				st.stopped = true
-				return
-			}
-			if choice == "keep" {
-				st.skipped++
-				break
-			}
-			var renameErr error
-			if choice == "local" {
-				renameErr = s.renameLocalDir(dir, target)
-			} else {
-				renameErr = s.renameRemoteTo(pair, localName, account)
-			}
-			if renameErr == nil {
-				st.renamed++
-				break
-			}
-			p.Line(render.Red, "  error: %v", renameErr)
-			if errors.Is(renameErr, errNameConflict) {
-				continue
-			}
-			st.failed++
-			break
+		case s.chooseRename(pair, account, c, st):
+			st.stopped = true
+			return
 		}
 	}
+}
+
+func (s *session) printNamesDiffer(pair matched) {
+	dir := pair.local.Path
+	target := filepath.Join(filepath.Dir(dir), pair.remote.Name)
+	renamedFull := pair.remote.Owner + "/" + filepath.Base(dir)
+
+	p := s.printer
+	p.Line("", "")
+	p.Line(render.Bold, "Names differ: %s  ↔  %s", shortPath(dir), pair.remote.FullName())
+	p.Line("", "  local   %-22s %s → %s", "rename the directory", shortPath(dir), shortPath(target))
+	p.Line("", "  remote  %-22s %s → %s", "rename on "+s.prov.Name(), pair.remote.FullName(), renamedFull)
+	p.Line("", "  keep    leave both names as they are")
+}
+
+func (s *session) chooseRename(pair matched, account []provider.Repo, c *confirmer, st *fixStats) bool {
+	for {
+		choice, ok, err := c.option("  Rename which one?", "local", "remote", "keep")
+		if err != nil || !ok {
+			s.reportStop(err, st)
+			return true
+		}
+		if choice == "keep" {
+			st.skipped++
+			return false
+		}
+
+		err = s.renameSide(pair, choice, account)
+		switch {
+		case err == nil:
+			st.renamed++
+			return false
+		case errors.Is(err, errNameConflict):
+			s.printer.Line(render.Red, "  error: %v", err)
+		default:
+			s.printer.Line(render.Red, "  error: %v", err)
+			st.failed++
+			return false
+		}
+	}
+}
+
+func (s *session) reportStop(err error, st *fixStats) {
+	if err != nil {
+		s.printer.Line(render.Red, "  %v", err)
+		st.failed++
+		return
+	}
+
+	s.printer.Line(render.Grey, "Stopped by the user.")
+}
+
+func (s *session) renameSide(pair matched, choice string, account []provider.Repo) error {
+	dir := pair.local.Path
+	if choice == "local" {
+		return s.renameLocalDir(dir, filepath.Join(filepath.Dir(dir), pair.remote.Name))
+	}
+
+	return s.renameRemoteTo(pair, filepath.Base(dir), account)
 }
 
 var errNameConflict = errors.New("name conflict")
