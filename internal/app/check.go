@@ -144,96 +144,125 @@ type matcher struct {
 }
 
 func collect(ctx context.Context, prov provider.Provider, store *cache.Cache, cfg config.Config, roots []string, opts options, pr *progress) ([]matched, inventory, error) {
-	inv := inventory{}
 	locals, err := scanLocal(cfg, opts, roots, pr, store)
 	if err != nil {
-		return nil, inv, err
+		return nil, inventory{}, err
 	}
+	account, remotes, err := listRemotes(ctx, prov, pr)
+	if err != nil {
+		return nil, inventory{}, err
+	}
+
+	m := newMatcher(ctx, prov, account, locals, remotes)
+	pr.setPhase("matching against " + prov.Name())
+	pr.setTotal(len(locals))
+	for i, local := range locals {
+		pr.step(shortPath(local.Path), i)
+		m.match(local)
+	}
+	pr.complete()
+
+	inv := m.finish(remotes)
+	return inv.pairs, inv, nil
+}
+
+func listRemotes(ctx context.Context, prov provider.Provider, pr *progress) (string, []provider.Repo, error) {
 	pr.setPhase(prov.Name() + " api")
 	pr.setUnit("repositories")
 	account, err := prov.Account(ctx)
 	if err != nil {
-		return nil, inv, err
+		return "", nil, err
 	}
-	remotes, err := prov.ListRepos(ctx)
-	if err != nil {
-		return nil, inv, err
-	}
-	inv.account = account
-	inv.locals = locals
-	inv.localCount = len(locals)
-	inv.remoteCount = len(remotes)
-	inv.remotes = remotes
 
+	remotes, err := prov.ListRepos(ctx)
+	return account, remotes, err
+}
+
+func newMatcher(ctx context.Context, prov provider.Provider, account string, locals []scan.Repo, remotes []provider.Repo) *matcher {
 	byName := make(map[string]provider.Repo, len(remotes))
 	for _, repo := range remotes {
 		byName[strings.ToLower(repo.FullName())] = repo
 	}
 
-	resolve := func(url string) (provider.Repo, string, bool) {
-		owner, name, ok := prov.ParseRemote(url)
+	inv := inventory{account: account, locals: locals, localCount: len(locals), remoteCount: len(remotes), remotes: remotes}
+	return &matcher{ctx: ctx, prov: prov, byName: byName, seen: map[string]bool{}, inv: inv}
+}
+
+func (m *matcher) resolve(url string) (provider.Repo, string, bool) {
+	owner, name, ok := m.prov.ParseRemote(url)
+	if !ok {
+		return provider.Repo{}, "", false
+	}
+
+	full := owner + "/" + name
+	if remote, found := m.byName[strings.ToLower(full)]; found {
+		return remote, full, true
+	}
+	resolved, err := m.prov.Repo(m.ctx, owner, name)
+	if err != nil || resolved.Name == "" {
+		return provider.Repo{}, full, false
+	}
+	return resolved, full, true
+}
+
+func (m *matcher) match(local scan.Repo) {
+	remotesOf, err := gitcmd.Remotes(m.ctx, local.Path)
+	if err != nil {
+		m.inv.localOnly = append(m.inv.localOnly, LocalOnly{Path: local.Path, Kind: KindUnreadable, Reason: "origin unreadable"})
+		return
+	}
+
+	pair, other, found := m.originPair(local, remotesOf)
+	switch {
+	case found:
+		m.addPair(pair)
+	case other != "":
+		m.inv.localOnly = append(m.inv.localOnly, LocalOnly{Path: local.Path, Kind: KindNonOrigin, Reason: "origin is not on " + m.prov.Name() + ", remote " + other + " is"})
+	default:
+		m.inv.localOnly = append(m.inv.localOnly, unmatchedLocal(m.prov, local.Path, m.inv.account, originURLOf(remotesOf)))
+	}
+}
+
+func (m *matcher) originPair(local scan.Repo, remotesOf []gitcmd.Remote) (matched, string, bool) {
+	other := ""
+	for _, r := range remotesOf {
+		remote, full, ok := m.resolve(r.URL)
 		if !ok {
-			return provider.Repo{}, "", false
+			continue
 		}
-		full := owner + "/" + name
-		if remote, found := byName[strings.ToLower(full)]; found {
-			return remote, full, true
+		if r.Name == "origin" {
+			return originMatch(local, remote, r.Name, full), other, true
 		}
-		resolved, err := prov.Repo(ctx, owner, name)
-		if err != nil || resolved.Name == "" {
-			return provider.Repo{}, full, false
+
+		m.seen[strings.ToLower(remote.FullName())] = true
+		if other == "" {
+			other = r.Name
 		}
-		return resolved, full, true
+	}
+	return matched{}, other, false
+}
+
+func originMatch(local scan.Repo, remote provider.Repo, remoteName, full string) matched {
+	pair := matched{local: local, remote: remote, remoteName: remoteName}
+	if remote.FullName() != full {
+		pair.originName = full
+	}
+	return pair
+}
+
+func (m *matcher) addPair(pair matched) {
+	if pair.originName != "" {
+		m.inv.mismatched = append(m.inv.mismatched, OriginMismatch{Path: pair.local.Path, Origin: pair.originName, Canonical: pair.remote.FullName()})
 	}
 
-	seen := map[string]bool{}
-	pr.setPhase("matching against " + prov.Name())
-	pr.setTotal(len(locals))
-	for i, local := range locals {
-		pr.step(shortPath(local.Path), i)
-		remotesOf, err := gitcmd.Remotes(ctx, local.Path)
-		if err != nil {
-			inv.localOnly = append(inv.localOnly, LocalOnly{Path: local.Path, Kind: KindUnreadable, Reason: "origin unreadable"})
-			continue
-		}
-		pair, found := matched{}, false
-		other := ""
-		for _, r := range remotesOf {
-			remote, full, ok := resolve(r.URL)
-			if !ok {
-				continue
-			}
-			if r.Name != "origin" {
-				seen[strings.ToLower(remote.FullName())] = true
-				if other == "" {
-					other = r.Name
-				}
-				continue
-			}
-			pair, found = matched{local: local, remote: remote, remoteName: r.Name}, true
-			if remote.FullName() != full {
-				pair.originName = full
-			}
-			break
-		}
-		if found {
-			if pair.originName != "" {
-				inv.mismatched = append(inv.mismatched, OriginMismatch{Path: local.Path, Origin: pair.originName, Canonical: pair.remote.FullName()})
-			}
-			seen[strings.ToLower(pair.remote.FullName())] = true
-			inv.pairs = append(inv.pairs, pair)
-			continue
-		}
-		if other != "" {
-			inv.localOnly = append(inv.localOnly, LocalOnly{Path: local.Path, Kind: KindNonOrigin, Reason: "origin is not on " + prov.Name() + ", remote " + other + " is"})
-			continue
-		}
-		inv.localOnly = append(inv.localOnly, unmatchedLocal(prov, local.Path, account, originURLOf(remotesOf)))
-	}
+	m.seen[strings.ToLower(pair.remote.FullName())] = true
+	m.inv.pairs = append(m.inv.pairs, pair)
+}
 
-	pr.complete()
+func (m *matcher) finish(remotes []provider.Repo) inventory {
+	inv := m.inv
 	for _, repo := range remotes {
-		if !seen[strings.ToLower(repo.FullName())] {
+		if !m.seen[strings.ToLower(repo.FullName())] {
 			inv.remoteOnly = append(inv.remoteOnly, RemoteOnly{FullName: repo.FullName(), WebURL: repo.WebURL, Archived: repo.Archived, repo: repo})
 		}
 	}
@@ -241,7 +270,7 @@ func collect(ctx context.Context, prov provider.Provider, store *cache.Cache, cf
 	sort.Slice(inv.mismatched, func(i, j int) bool { return inv.mismatched[i].Path < inv.mismatched[j].Path })
 	sort.Slice(inv.localOnly, func(i, j int) bool { return inv.localOnly[i].Path < inv.localOnly[j].Path })
 	sort.Slice(inv.remoteOnly, func(i, j int) bool { return inv.remoteOnly[i].FullName < inv.remoteOnly[j].FullName })
-	return inv.pairs, inv, nil
+	return inv
 }
 
 func originURLOf(remotes []gitcmd.Remote) string {
