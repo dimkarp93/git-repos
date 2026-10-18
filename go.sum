@@ -1,5 +1,7 @@
 github.com/dimkarp93/install-libs v0.2.0 h1:BUVeqmjb2DSAmJJCOWPqo3xHqojGl86RrpdsC3Fhda4=
 github.com/dimkarp93/install-libs v0.2.0/go.mod h1:vRxTchW9exuc70jxyA0hG9JljUd1MmO7NLDd6r8w2UM=
+github.com/dimkarp93/utils v0.1.1 h1:E/uBd99VOa5HrA3blrD78MePEBCnZOU8ZvjH38YqKvA=
+github.com/dimkarp93/utils v0.1.1/go.mod h1:S6HY+odCOHaJiORntRK4h82PtzpXaK9lrlLCdDOVgt4=
 github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWDWE=
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
 go.yaml.in/yaml/v3 v3.0.5 h1:N6y/pJk8buWs9NY5ERU2HSMfm+IuD/OtfdAnq6kESPw=
