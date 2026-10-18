@@ -101,33 +101,17 @@ func (c *Client) ListRepos(ctx context.Context) ([]provider.Repo, error) {
 	if c.progress != nil && c.owned > 0 {
 		c.progress.Total(c.owned)
 	}
+
 	for pageNum := 1; next != ""; pageNum++ {
 		var page []apiRepo
 		link, err := c.get(ctx, next, &page)
 		if err != nil {
 			return nil, err
 		}
-		if last := lastPage(link); last > 0 {
-			c.note("repository list, page %d of %d", pageNum, last)
-			if c.progress != nil && c.owned == 0 {
-				c.progress.Total(last)
-				c.progress.Done(pageNum)
-			}
-		} else {
-			c.note("repository list, page %d", pageNum)
-		}
+
+		c.notePage(pageNum, lastPage(link))
 		for _, r := range page {
-			out = append(out, provider.Repo{
-				Owner:         r.Owner.Login,
-				Name:          r.Name,
-				DefaultBranch: r.DefaultBranch,
-				Private:       r.Private,
-				Archived:      r.Archived,
-				Fork:          r.Fork,
-				WebURL:        r.HTMLURL,
-				CloneURL:      r.CloneURL,
-				SSHURL:        r.SSHURL,
-			})
+			out = append(out, r.toRepo())
 		}
 		if c.progress != nil && c.owned > 0 {
 			c.progress.Done(len(out))
@@ -135,6 +119,33 @@ func (c *Client) ListRepos(ctx context.Context) ([]provider.Repo, error) {
 		next = nextLink(link)
 	}
 	return out, nil
+}
+
+func (c *Client) notePage(pageNum, last int) {
+	if last <= 0 {
+		c.note("repository list, page %d", pageNum)
+		return
+	}
+
+	c.note("repository list, page %d of %d", pageNum, last)
+	if c.progress != nil && c.owned == 0 {
+		c.progress.Total(last)
+		c.progress.Done(pageNum)
+	}
+}
+
+func (r apiRepo) toRepo() provider.Repo {
+	return provider.Repo{
+		Owner:         r.Owner.Login,
+		Name:          r.Name,
+		DefaultBranch: r.DefaultBranch,
+		Private:       r.Private,
+		Archived:      r.Archived,
+		Fork:          r.Fork,
+		WebURL:        r.HTMLURL,
+		CloneURL:      r.CloneURL,
+		SSHURL:        r.SSHURL,
+	}
 }
 
 func (c *Client) Repo(ctx context.Context, owner, name string) (provider.Repo, error) {
@@ -261,23 +272,30 @@ func (c *Client) History(ctx context.Context, owner, name, branch string) (provi
 	if len(first) == 0 {
 		return provider.History{}, provider.ErrEmpty
 	}
+
 	history := provider.History{Recent: make([]provider.Commit, len(first))}
 	for i, item := range first {
 		history.Recent[i] = item.toCommit()
 	}
+
 	last := lastPage(link)
 	if last <= 1 {
 		history.Root = history.Recent[len(history.Recent)-1]
 		history.Total = len(first)
 		return history, nil
 	}
+	return c.withRoot(ctx, history, base, last, owner+"/"+name)
+}
+
+func (c *Client) withRoot(ctx context.Context, history provider.History, base string, last int, full string) (provider.History, error) {
 	var tail []apiCommit
 	if _, err := c.get(ctx, fmt.Sprintf("%s&page=%d", base, last), &tail); err != nil {
 		return provider.History{}, err
 	}
 	if len(tail) == 0 {
-		return provider.History{}, fmt.Errorf("github: empty last page of %s/%s history", owner, name)
+		return provider.History{}, fmt.Errorf("github: empty last page of %s history", full)
 	}
+
 	history.Root = tail[len(tail)-1].toCommit()
 	history.Total = (last-1)*historyPageSize + len(tail)
 	return history, nil
@@ -328,35 +346,45 @@ func (c *Client) ParseRemote(remoteURL string) (string, string, bool) {
 
 func parseRemote(raw string) (host, owner, name string, ok bool) {
 	s := strings.TrimSpace(raw)
-	if s == "" {
-		return "", "", "", false
-	}
 	switch {
+	case s == "":
+		return "", "", "", false
 	case strings.Contains(s, "://"):
-		u, err := url.Parse(s)
-		if err != nil {
-			return "", "", "", false
-		}
-		host = u.Hostname()
-		owner, name, ok = splitPath(u.Path)
+		host, owner, name, ok = parseURLRemote(s)
 	case strings.Contains(s, ":"):
-		rest := s
-		if i := strings.Index(rest, "@"); i >= 0 {
-			rest = rest[i+1:]
-		}
-		h, path, found := strings.Cut(rest, ":")
-		if !found {
-			return "", "", "", false
-		}
-		host = h
-		owner, name, ok = splitPath(path)
+		host, owner, name, ok = parseSCPRemote(s)
 	default:
 		return "", "", "", false
 	}
+
 	if !ok || host == "" {
 		return "", "", "", false
 	}
 	return host, owner, name, true
+}
+
+func parseURLRemote(s string) (string, string, string, bool) {
+	u, err := url.Parse(s)
+	if err != nil {
+		return "", "", "", false
+	}
+
+	owner, name, ok := splitPath(u.Path)
+	return u.Hostname(), owner, name, ok
+}
+
+func parseSCPRemote(s string) (string, string, string, bool) {
+	rest := s
+	if i := strings.Index(rest, "@"); i >= 0 {
+		rest = rest[i+1:]
+	}
+
+	host, path, found := strings.Cut(rest, ":")
+	if !found {
+		return "", "", "", false
+	}
+	owner, name, ok := splitPath(path)
+	return host, owner, name, ok
 }
 
 func splitPath(path string) (string, string, bool) {
@@ -392,53 +420,21 @@ func (c *Client) delete(ctx context.Context, u string) error {
 }
 
 func (c *Client) do(ctx context.Context, method, u string, body, v any) (linkHeader string, err error) {
-	var payload io.Reader
-	if body != nil {
-		encoded, err := json.Marshal(body)
-		if err != nil {
-			return "", err
-		}
-		payload = bytes.NewReader(encoded)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, u, payload)
+	req, err := c.newRequest(ctx, method, u, body)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", apiVersion)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
+
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
 
-	switch {
-	case resp.StatusCode == http.StatusNotFound:
-		return "", provider.ErrNotFound
-	case resp.StatusCode == http.StatusConflict:
-		return "", fmt.Errorf("github: %w: %s", provider.ErrEmpty, message(resp.Body))
-	case resp.StatusCode == http.StatusUnauthorized:
-		return "", fmt.Errorf("github: %w: token rejected", provider.ErrNoToken)
-	case resp.StatusCode == http.StatusUnprocessableEntity:
-		msg := message(resp.Body)
-		if strings.Contains(strings.ToLower(msg), "already exists") {
-			return "", fmt.Errorf("github: %w: %s", provider.ErrExists, msg)
-		}
-		return "", fmt.Errorf("github: %s: %s", resp.Status, msg)
-	case resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests:
-		if resp.Header.Get("X-RateLimit-Remaining") == "0" {
-			return "", fmt.Errorf("github: %w, resets at %s", provider.ErrRateLimit, resetTime(resp.Header.Get("X-RateLimit-Reset")))
-		}
-		return "", fmt.Errorf("github: %w: %s", provider.ErrForbidden, message(resp.Body))
-	case resp.StatusCode >= 300:
-		return "", fmt.Errorf("github: %s: %s", resp.Status, message(resp.Body))
+	if err := statusError(resp); err != nil {
+		return "", err
 	}
+
 	if v == nil {
 		io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		return resp.Header.Get("Link"), nil
@@ -447,6 +443,75 @@ func (c *Client) do(ctx context.Context, method, u string, body, v any) (linkHea
 		return "", fmt.Errorf("github: decode %s: %w", u, err)
 	}
 	return resp.Header.Get("Link"), nil
+}
+
+func (c *Client) newRequest(ctx context.Context, method, u string, body any) (*http.Request, error) {
+	payload, err := jsonPayload(body)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u, payload)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", apiVersion)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	return req, nil
+}
+
+func jsonPayload(body any) (io.Reader, error) {
+	if body == nil {
+		return nil, nil
+	}
+
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	return bytes.NewReader(encoded), nil
+}
+
+func statusError(resp *http.Response) error {
+	switch {
+	case resp.StatusCode == http.StatusNotFound:
+		return provider.ErrNotFound
+	case resp.StatusCode == http.StatusConflict:
+		return fmt.Errorf("github: %w: %s", provider.ErrEmpty, message(resp.Body))
+	case resp.StatusCode == http.StatusUnauthorized:
+		return fmt.Errorf("github: %w: token rejected", provider.ErrNoToken)
+	case resp.StatusCode == http.StatusUnprocessableEntity:
+		return unprocessable(resp)
+	case resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests:
+		return forbidden(resp)
+	case resp.StatusCode >= 300:
+		return fmt.Errorf("github: %s: %s", resp.Status, message(resp.Body))
+	default:
+		return nil
+	}
+}
+
+func unprocessable(resp *http.Response) error {
+	msg := message(resp.Body)
+	if strings.Contains(strings.ToLower(msg), "already exists") {
+		return fmt.Errorf("github: %w: %s", provider.ErrExists, msg)
+	}
+
+	return fmt.Errorf("github: %s: %s", resp.Status, msg)
+}
+
+func forbidden(resp *http.Response) error {
+	if resp.Header.Get("X-RateLimit-Remaining") == "0" {
+		return fmt.Errorf("github: %w, resets at %s", provider.ErrRateLimit, resetTime(resp.Header.Get("X-RateLimit-Reset")))
+	}
+
+	return fmt.Errorf("github: %w: %s", provider.ErrForbidden, message(resp.Body))
 }
 
 func message(body io.Reader) string {
