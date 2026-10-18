@@ -554,85 +554,113 @@ func (s *session) linkMatches(all []localMatches, c *confirmer, opts options) fi
 	var st fixStats
 	used := map[string]bool{}
 	for _, m := range all {
-		found := make([]evidence, 0, len(m.found))
-		for _, ev := range m.found {
-			if !used[ev.remote.item.FullName] {
-				found = append(found, ev)
-			}
-		}
-		if len(found) == 0 {
+		m.found = unusedEvidence(m.found, used)
+		if len(m.found) == 0 {
 			continue
 		}
-		m.found = found
+
 		s.printCandidates(m)
-
 		if opts.dryRun {
-			for _, dead := range m.local.dead {
-				s.printer.Line(render.Grey, "  would offer to remove remote %s: %s does not exist on %s", dead.name, dead.fullName, s.prov.Name())
-			}
-			name := "origin"
-			if m.local.originURL != "" && !m.local.originDead() {
-				name = s.prov.Name() + " (asked)"
-			}
-			s.printer.Line(render.Grey, "  would add remote %s → %s", name, found[0].remote.item.FullName)
-			st.linkedPairs = append(st.linkedPairs, matched{local: scan.Repo{Path: m.local.item.Path}, remote: found[0].remote.item.repo, remoteName: name})
+			s.planLink(m, &st)
 			continue
 		}
-
-		pick, ok := 0, true
-		if opts.assumeYes {
-			if pick, ok = autoPick(found); !ok {
-				s.printer.Line(render.Yellow, "  skipped: ambiguous, run without --yes to choose")
-				st.skipped++
-				continue
-			}
-		} else {
-			idx, ans, err := c.choose(fmt.Sprintf("Link %s with:", shortPath(m.local.item.Path)), len(found))
-			if err != nil {
-				s.printer.Line(render.Red, "  %v", err)
-				st.failed++
-				st.stopped = true
-				return st
-			}
-			switch ans {
-			case answerSkip:
-				st.skipped++
-				continue
-			case answerQuit:
-				s.printer.Line(render.Grey, "Stopped by the user.")
-				st.stopped = true
-				return st
-			}
-			pick = idx
-		}
-
-		remote := found[pick].remote
-		if !s.offerDeadRemoval(m.local, c, opts) {
-			s.printer.Line(render.Grey, "Stopped by the user.")
+		if stop := s.linkOne(m, used, c, opts, &st); stop {
 			st.stopped = true
 			return st
 		}
-		name, overwrite, ans, err := s.remoteNameFor(m.local, c)
-		if err != nil {
-			s.printer.Line(render.Red, "  error: %v", err)
-			st.failed++
-			continue
-		}
-		if ans == answerQuit {
-			s.printer.Line(render.Grey, "Stopped by the user.")
-			st.stopped = true
-			return st
-		}
-		if err := s.addLinkRemote(m.local, remote, name, overwrite); err != nil {
-			s.printer.Line(render.Red, "  error: %v", err)
-			st.failed++
-			continue
-		}
-		used[remote.item.FullName] = true
-		st.linked++
-		st.linkedPairs = append(st.linkedPairs, matched{local: scan.Repo{Path: m.local.item.Path}, remote: remote.item.repo, remoteName: name})
 	}
 	return st
+}
+
+func unusedEvidence(found []evidence, used map[string]bool) []evidence {
+	out := make([]evidence, 0, len(found))
+	for _, ev := range found {
+		if !used[ev.remote.item.FullName] {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+func (s *session) planLink(m localMatches, st *fixStats) {
+	for _, dead := range m.local.dead {
+		s.printer.Line(render.Grey, "  would offer to remove remote %s: %s does not exist on %s", dead.name, dead.fullName, s.prov.Name())
+	}
+
+	name := s.plannedRemoteName(m.local)
+	s.printer.Line(render.Grey, "  would add remote %s → %s", name, m.found[0].remote.item.FullName)
+	st.linkedPairs = append(st.linkedPairs, linkedPair(m.local, m.found[0].remote, name))
+}
+
+func (s *session) plannedRemoteName(local *localFacts) string {
+	if local.originURL != "" && !local.originDead() {
+		return s.prov.Name() + " (asked)"
+	}
+
+	return "origin"
+}
+
+func linkedPair(local *localFacts, remote *remoteFacts, name string) matched {
+	return matched{local: scan.Repo{Path: local.item.Path}, remote: remote.item.repo, remoteName: name}
+}
+
+func (s *session) linkOne(m localMatches, used map[string]bool, c *confirmer, opts options, st *fixStats) bool {
+	pick, ok, stop := s.pickMatch(m, c, opts, st)
+	if stop || !ok {
+		return stop
+	}
+
+	remote := m.found[pick].remote
+	if !s.offerDeadRemoval(m.local, c, opts) {
+		s.printer.Line(render.Grey, "Stopped by the user.")
+		return true
+	}
+
+	name, overwrite, ans, err := s.remoteNameFor(m.local, c)
+	if err == nil && ans == answerQuit {
+		s.printer.Line(render.Grey, "Stopped by the user.")
+		return true
+	}
+	if err == nil {
+		err = s.addLinkRemote(m.local, remote, name, overwrite)
+	}
+	if err != nil {
+		s.printer.Line(render.Red, "  error: %v", err)
+		st.failed++
+		return false
+	}
+
+	used[remote.item.FullName] = true
+	st.linked++
+	st.linkedPairs = append(st.linkedPairs, linkedPair(m.local, remote, name))
+	return false
+}
+
+func (s *session) pickMatch(m localMatches, c *confirmer, opts options, st *fixStats) (int, bool, bool) {
+	if opts.assumeYes {
+		pick, ok := autoPick(m.found)
+		if !ok {
+			s.printer.Line(render.Yellow, "  skipped: ambiguous, run without --yes to choose")
+			st.skipped++
+		}
+		return pick, ok, false
+	}
+
+	idx, ans, err := c.choose(fmt.Sprintf("Link %s with:", shortPath(m.local.item.Path)), len(m.found))
+	switch {
+	case err != nil:
+		s.printer.Line(render.Red, "  %v", err)
+		st.failed++
+		return 0, false, true
+	case ans == answerSkip:
+		st.skipped++
+		return 0, false, false
+	case ans == answerQuit:
+		s.printer.Line(render.Grey, "Stopped by the user.")
+		return 0, false, true
+	default:
+		return idx, true, false
+	}
 }
 
 func (l *localFacts) originDead() bool {
@@ -699,22 +727,11 @@ func (s *session) remoteNameFor(local *localFacts, c *confirmer) (string, bool, 
 
 func (s *session) addLinkRemote(local *localFacts, remote *remoteFacts, name string, overwrite bool) error {
 	dir := local.item.Path
-	protocol := s.cfg.Protocol
-	if s.opts.protocol == "" && local.originURL != "" {
-		protocol = protocolOf(local.originURL)
+	url := s.prov.RemoteURL(remote.item.repo, s.linkProtocol(local))
+	if err := s.writeLinkRemote(dir, name, url, overwrite); err != nil {
+		return err
 	}
-	url := s.prov.RemoteURL(remote.item.repo, protocol)
-	if overwrite {
-		if err := gitcmd.SetRemote(s.ctx, dir, name, url); err != nil {
-			return err
-		}
-		s.printer.Line(render.Green, "  linked: remote %s overwritten → %s", name, url)
-	} else {
-		if err := gitcmd.AddRemote(s.ctx, dir, name, url); err != nil {
-			return err
-		}
-		s.printer.Line(render.Green, "  linked: remote %s → %s", name, url)
-	}
+
 	branch := remote.item.repo.DefaultBranch
 	if err := gitcmd.Fetch(s.ctx, dir, name, branch); err != nil {
 		s.printer.Line(render.Yellow, "  warning: %v", err)
@@ -725,6 +742,30 @@ func (s *session) addLinkRemote(local *localFacts, remote *remoteFacts, name str
 			s.printer.Line(render.Yellow, "  warning: %v", err)
 		}
 	}
+	return nil
+}
+
+func (s *session) linkProtocol(local *localFacts) string {
+	if s.opts.protocol == "" && local.originURL != "" {
+		return protocolOf(local.originURL)
+	}
+
+	return s.cfg.Protocol
+}
+
+func (s *session) writeLinkRemote(dir, name, url string, overwrite bool) error {
+	if !overwrite {
+		if err := gitcmd.AddRemote(s.ctx, dir, name, url); err != nil {
+			return err
+		}
+		s.printer.Line(render.Green, "  linked: remote %s → %s", name, url)
+		return nil
+	}
+
+	if err := gitcmd.SetRemote(s.ctx, dir, name, url); err != nil {
+		return err
+	}
+	s.printer.Line(render.Green, "  linked: remote %s overwritten → %s", name, url)
 	return nil
 }
 
