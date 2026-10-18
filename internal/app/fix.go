@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,6 +15,7 @@ import (
 	"github.com/dimkarp93/git-repos/internal/provider"
 	"github.com/dimkarp93/git-repos/internal/render"
 	"github.com/dimkarp93/git-repos/internal/scan"
+	"github.com/dimkarp93/utils/pkg/collections"
 )
 
 const (
@@ -393,21 +395,13 @@ func historyEvidence(local *localFacts, remote *remoteFacts) evidence {
 }
 
 func withFileEvidence(ev evidence, local *localFacts, remote *remoteFacts) evidence {
-	localSHAs := map[string]bool{}
-	for _, sha := range local.blobs {
-		localSHAs[sha] = true
-	}
-	remoteSHAs := map[string]bool{}
-	for _, entry := range remote.tree {
-		remoteSHAs[entry.SHA] = true
-	}
+	localSHAs := collections.ToSet(slices.Collect(maps.Values(local.blobs)))
+	remoteSHAs := collections.ToSet(collections.Map(remote.tree, treeEntrySHA))
 
-	common := 0
-	for sha := range remoteSHAs {
-		if localSHAs[sha] {
-			common++
-		}
-	}
+	remoteKeys := collections.SortedKeys(remoteSHAs)
+	common := collections.CountFunc(remoteKeys, func(sha string) bool {
+		return localSHAs[sha]
+	})
 	union := len(localSHAs) + len(remoteSHAs) - common
 	if union == 0 || common == 0 {
 		return ev
@@ -421,13 +415,19 @@ func withFileEvidence(ev evidence, local *localFacts, remote *remoteFacts) evide
 	return ev
 }
 
+func treeEntrySHA(entry provider.TreeEntry) string {
+	return entry.SHA
+}
+
+func treeEntryPath(entry provider.TreeEntry) string {
+	return entry.Path
+}
+
 func samePaths(local *localFacts, remote *remoteFacts, localSHAs map[string]bool) []string {
-	var paths []string
-	for _, entry := range remote.tree {
-		if localSHAs[entry.SHA] && local.blobs[entry.Path] == entry.SHA {
-			paths = append(paths, entry.Path)
-		}
-	}
+	same := collections.Filter(remote.tree, func(entry provider.TreeEntry) bool {
+		return localSHAs[entry.SHA] && local.blobs[entry.Path] == entry.SHA
+	})
+	paths := collections.Map(same, treeEntryPath)
 
 	sort.Slice(paths, func(i, j int) bool {
 		if di, dj := strings.Count(paths[i], "/"), strings.Count(paths[j], "/"); di != dj {
@@ -608,13 +608,9 @@ func (s *session) linkMatches(all []localMatches, c *confirmer, opts options) fi
 }
 
 func unusedEvidence(found []evidence, used map[string]bool) []evidence {
-	out := make([]evidence, 0, len(found))
-	for _, ev := range found {
-		if !used[ev.remote.item.FullName] {
-			out = append(out, ev)
-		}
-	}
-	return out
+	return collections.Filter(found, func(ev evidence) bool {
+		return !used[ev.remote.item.FullName]
+	})
 }
 
 func (s *session) planLink(m localMatches, st *fixStats) {
