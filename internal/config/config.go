@@ -113,6 +113,11 @@ func ExpandPath(p string) string {
 	return os.ExpandEnv(p)
 }
 
+type parser struct {
+	r       raw
+	current string
+}
+
 func parse(text string) (raw, error) {
 	r := raw{scalars: map[string]string{}, lists: map[string][]string{}}
 	scanner := bufio.NewScanner(strings.NewReader(text))
