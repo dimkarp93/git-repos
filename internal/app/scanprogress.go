@@ -3,6 +3,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -27,46 +28,59 @@ type scanEstimate struct {
 
 func newScanEstimate(cfg config.Config, roots []string, store *cache.Cache) *scanEstimate {
 	est := &scanEstimate{
+		roots:   resolvedRoots(roots),
 		names:   map[string][]string{},
 		offset:  map[string]int{},
 		visited: map[string]int{},
 	}
+
+	if known, ok := cachedDirs(store, est.roots); ok {
+		est.byDirs = true
+		est.total = known
+		est.unit = "directories"
+		return est
+	}
+
+	est.planSubtrees(cfg.Ignore)
+	return est
+}
+
+func resolvedRoots(roots []string) []string {
+	out := make([]string, 0, len(roots))
 	for _, root := range roots {
 		resolved, err := filepath.EvalSymlinks(root)
 		if err != nil {
 			resolved = root
 		}
-		est.roots = append(est.roots, resolved)
+		out = append(out, resolved)
 	}
-	if store != nil {
-		known := 0
-		for _, root := range est.roots {
-			dirs, ok := store.Dirs(cache.ScanKey(root))
-			if !ok {
-				known = 0
-				break
-			}
-			known += dirs
-		}
-		if known > 0 {
-			est.byDirs = true
-			est.total = known
-			est.unit = "directories"
-			return est
-		}
+	return out
+}
+
+func cachedDirs(store *cache.Cache, roots []string) (int, bool) {
+	if store == nil {
+		return 0, false
 	}
-	for _, root := range est.roots {
-		est.offset[root] = est.total
-		names := subdirs(root, cfg.Ignore)
-		est.names[root] = names
-		if len(names) == 0 {
-			est.total++
-			continue
+
+	known := 0
+	for _, root := range roots {
+		dirs, ok := store.Dirs(cache.ScanKey(root))
+		if !ok {
+			return 0, false
 		}
-		est.total += len(names)
+		known += dirs
 	}
-	est.unit = "subtrees"
-	return est
+	return known, known > 0
+}
+
+func (e *scanEstimate) planSubtrees(ignore []string) {
+	for _, root := range e.roots {
+		e.offset[root] = e.total
+		names := subdirs(root, ignore)
+		e.names[root] = names
+		e.total += max(len(names), 1)
+	}
+	e.unit = "subtrees"
 }
 
 func subdirs(root string, ignore []string) []string {
@@ -90,41 +104,37 @@ func subdirs(root string, ignore []string) []string {
 }
 
 func ignored(name string, list []string) bool {
-	for _, item := range list {
-		if item == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(list, name)
 }
 
 func (e *scanEstimate) visit(path string) int {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+
 	root, rel := e.locate(path)
 	if root != "" {
 		e.visited[root]++
 	}
 	e.seen++
-	if e.byDirs {
+
+	switch {
+	case e.byDirs:
 		return e.seen
-	}
-	if root == "" {
+	case root == "":
+		return e.bucket
+	default:
+		e.bucket = max(e.bucket, e.position(root, rel))
 		return e.bucket
 	}
-	at := e.offset[root]
-	if rel != "." {
-		names := e.names[root]
-		component := rel
-		if i := strings.IndexByte(rel, filepath.Separator); i >= 0 {
-			component = rel[:i]
-		}
-		at += sort.SearchStrings(names, component)
+}
+
+func (e *scanEstimate) position(root, rel string) int {
+	if rel == "." {
+		return e.offset[root]
 	}
-	if at > e.bucket {
-		e.bucket = at
-	}
-	return e.bucket
+
+	component, _, _ := strings.Cut(rel, string(filepath.Separator))
+	return e.offset[root] + sort.SearchStrings(e.names[root], component)
 }
 
 func (e *scanEstimate) locate(path string) (string, string) {
