@@ -251,6 +251,42 @@ func providerTargets(s *session, opts options, set *dirSet) error {
 	return nil
 }
 
+func isSetDir(dir string) bool {
+	panic("not implemented")
+}
+
+func statusDirs(s *session, locals []scan.Repo, opts options) []string {
+	panic("not implemented")
+}
+
+func localDirs(s *session, opts options) ([]string, error) {
+	panic("not implemented")
+}
+
+func providerDirs(s *session, opts options) ([]string, error) {
+	panic("not implemented")
+}
+
+func localOnlyDirs(inv inventory, opts options) []string {
+	panic("not implemented")
+}
+
+func repoPath(local scan.Repo) string {
+	panic("not implemented")
+}
+
+func localOnlyPath(item LocalOnly) string {
+	panic("not implemented")
+}
+
+func statusResultDir(res statusResult) string {
+	panic("not implemented")
+}
+
+func inspectResultDir(res Result) string {
+	panic("not implemented")
+}
+
 func startFor(opts options, needProvider bool) (*session, error) {
 	if needProvider {
 		return start(opts)
