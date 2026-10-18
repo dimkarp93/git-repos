@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -29,9 +28,9 @@ func TestGuardAllowsPlainRepository(t *testing.T) {
 	root := t.TempDir()
 	dir := repoWithOrigin(t, root, "tool", "https://fake.test/tester/tool.git")
 
-	if row, blocked := newTestGuard(t, root).check(dir); blocked {
-		t.Fatalf("blocked: %+v", row)
-	}
+	_, blocked := newTestGuard(t, root).check(dir)
+
+	assert.False(t, blocked)
 }
 
 func TestGuardBlocksExtraWorktree(t *testing.T) {
@@ -41,9 +40,16 @@ func TestGuardBlocksExtraWorktree(t *testing.T) {
 	git(t, dir, "worktree", "add", "-b", "feature", wt)
 
 	row, blocked := newTestGuard(t, root).check(dir)
-	if !blocked || !strings.Contains(row.Reason, "worktrees:") || row.Remote != "origin" {
-		t.Fatalf("row = %+v, blocked = %v", row, blocked)
-	}
+
+	t.Run("blocked", func(t *testing.T) {
+		assert.True(t, blocked)
+	})
+	t.Run("reason", func(t *testing.T) {
+		assert.Contains(t, row.Reason, "worktrees:")
+	})
+	t.Run("remote", func(t *testing.T) {
+		assert.Equal(t, "origin", row.Remote)
+	})
 }
 
 func TestGuardIgnoresDetachedWorktree(t *testing.T) {
@@ -52,9 +58,9 @@ func TestGuardIgnoresDetachedWorktree(t *testing.T) {
 	wt := filepath.Join(t.TempDir(), "_ide")
 	git(t, dir, "worktree", "add", "--detach", wt)
 
-	if row, blocked := newTestGuard(t, root).check(dir); blocked {
-		t.Fatalf("blocked: %+v", row)
-	}
+	_, blocked := newTestGuard(t, root).check(dir)
+
+	assert.False(t, blocked)
 }
 
 func TestGuardIgnoresPrunableWorktree(t *testing.T) {
@@ -65,12 +71,14 @@ func TestGuardIgnoresPrunableWorktree(t *testing.T) {
 	git(t, dir, "worktree", "remove", "--force", wt)
 	git(t, dir, "worktree", "prune")
 
-	if row, blocked := newTestGuard(t, root).check(dir); blocked {
-		t.Fatalf("blocked: %+v", row)
-	}
+	_, blocked := newTestGuard(t, root).check(dir)
+
+	assert.False(t, blocked)
 }
 
-func TestGuardCandidatesSplitsBlocked(t *testing.T) {
+func splitCandidates(t *testing.T) ([]LocalOnly, []skippedRepo, string, string) {
+	t.Helper()
+
 	root := t.TempDir()
 	plain := repoWithOrigin(t, root, "plain", "https://gitlab.example/x/plain.git")
 	busy := repoWithOrigin(t, root, "busy", "https://gitlab.example/x/busy.git")
@@ -79,22 +87,46 @@ func TestGuardCandidatesSplitsBlocked(t *testing.T) {
 	g, err := newGuard(context.Background(), nil)
 	require.NoError(t, err)
 	kept, blocked := guardCandidates(g, []LocalOnly{{Path: plain}, {Path: busy}})
-	if len(kept) != 1 || kept[0].Path != plain || len(blocked) != 1 || blocked[0].Path != busy {
-		t.Fatalf("kept = %+v, blocked = %+v", kept, blocked)
-	}
-	if exitSkipped(blocked) != ExitFailure || exitSkipped(nil) != ExitOK {
-		t.Error("exitSkipped does not follow the skipped rows")
-	}
+	return kept, blocked, plain, busy
+}
+
+func TestGuardCandidatesSplitsBlocked(t *testing.T) {
+	kept, blocked, plain, busy := splitCandidates(t)
+
+	t.Run("kept", func(t *testing.T) {
+		assert.Equal(t, []LocalOnly{{Path: plain}}, kept)
+	})
+	t.Run("blocked", func(t *testing.T) {
+		require.Len(t, blocked, 1)
+		assert.Equal(t, busy, blocked[0].Path)
+	})
+}
+
+func TestExitSkipped(t *testing.T) {
+	t.Run("with skipped rows", func(t *testing.T) {
+		assert.Equal(t, ExitFailure, exitSkipped([]skippedRepo{{Path: "/x"}}))
+	})
+	t.Run("without rows", func(t *testing.T) {
+		assert.Equal(t, ExitOK, exitSkipped(nil))
+	})
 }
 
 func TestPrintSkippedRendersRows(t *testing.T) {
 	var out bytes.Buffer
-	p := render.NewPrinter(&out, false)
-	printSkipped(p, []skippedRepo{{Path: "/src/tool", Reason: "worktrees: /wt/a", Remote: "origin", URL: "https://fake.test/tester/tool"}})
+
+	printSkipped(render.NewPrinter(&out, false), []skippedRepo{{Path: "/src/tool", Reason: "worktrees: /wt/a", Remote: "origin", URL: "https://fake.test/tester/tool"}})
+
 	for _, want := range []string{"/src/tool", "worktrees: /wt/a", "origin", "https://fake.test/tester/tool"} {
-		assert.Contains(t, out.String(), want, "output lacks %q:\n%s", want, out.String())
+		t.Run(want, func(t *testing.T) {
+			assert.Contains(t, out.String(), want)
+		})
 	}
-	out.Reset()
-	printSkipped(p, nil)
-	assert.Equal(t, 0, out.Len(), "output for no rows: %q", out.String())
+}
+
+func TestPrintSkippedWithoutRows(t *testing.T) {
+	var out bytes.Buffer
+
+	printSkipped(render.NewPrinter(&out, false), nil)
+
+	assert.Empty(t, out.String())
 }

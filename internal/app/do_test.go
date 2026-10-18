@@ -37,10 +37,17 @@ func TestSelectReposWithoutFilters(t *testing.T) {
 	s := doSession(t, root, &out)
 
 	targets, err := selectRepos(s, options{})
+
 	require.NoError(t, err)
-	if len(targets) != 2 || filepath.Base(targets[0]) != "a" || filepath.Base(targets[1]) != "b" {
-		t.Fatalf("targets = %v", targets)
+	assert.Equal(t, []string{"a", "b"}, baseNames(targets))
+}
+
+func baseNames(paths []string) []string {
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		out = append(out, filepath.Base(path))
 	}
+	return out
 }
 
 func TestSelectReposByInDevelop(t *testing.T) {
@@ -54,10 +61,9 @@ func TestSelectReposByInDevelop(t *testing.T) {
 	s := doSession(t, root, &out)
 
 	targets, err := selectRepos(s, options{jobs: 1, filters: filters{inDevelop: true}})
+
 	require.NoError(t, err)
-	if len(targets) != 1 || filepath.Base(targets[0]) != "dirty" {
-		t.Fatalf("targets = %v", targets)
-	}
+	assert.Equal(t, []string{"dirty"}, baseNames(targets))
 }
 
 func TestExecAllContinuesAfterFailure(t *testing.T) {
@@ -67,14 +73,16 @@ func TestExecAllContinuesAfterFailure(t *testing.T) {
 	var out strings.Builder
 	s := doSession(t, root, &out)
 
-	if code := execAll(s, []string{first, second}, "exit 3"); code != ExitFailure {
-		t.Fatalf("code = %d", code)
+	code := execAll(s, []string{first, second}, "exit 3")
+
+	t.Run("exit code", func(t *testing.T) {
+		assert.Equal(t, ExitFailure, code)
+	})
+	for _, want := range []string{"[1/2] :: a", "[2/2] :: b", "done — 0, errors — 2"} {
+		t.Run(want, func(t *testing.T) {
+			assert.Contains(t, out.String(), want)
+		})
 	}
-	text := out.String()
-	if !strings.Contains(text, "[1/2] :: a") || !strings.Contains(text, "[2/2] :: b") {
-		t.Fatalf("out = %q", text)
-	}
-	require.Contains(t, text, "done — 0, errors — 2", "out = %q", text)
 }
 
 func TestExecAllPassesEnvAndDir(t *testing.T) {
@@ -84,12 +92,12 @@ func TestExecAllPassesEnvAndDir(t *testing.T) {
 	var out strings.Builder
 	s := doSession(t, root, &out)
 
-	if code := execAll(s, []string{dir}, "printf '%s' \"$GIT_REPOS_NAME\" > marker"); code != ExitOK {
-		t.Fatalf("code = %d", code)
-	}
+	code := execAll(s, []string{dir}, "printf '%s' \"$GIT_REPOS_NAME\" > marker")
+
+	require.Equal(t, ExitOK, code)
 	data, err := os.ReadFile(marker)
 	require.NoError(t, err)
-	require.Equal(t, "a", string(data), "marker = %q", data)
+	assert.Equal(t, "a", string(data))
 }
 
 func TestShellScriptQuoting(t *testing.T) {
