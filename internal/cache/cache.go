@@ -120,25 +120,32 @@ func (c *Cache) Save() error {
 	if c.off {
 		return nil
 	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.dirty {
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(c.path), 0o755); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(c.entries, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := c.path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, c.path); err != nil {
+
+	if err := writeEntries(c.path, c.entries); err != nil {
 		return err
 	}
 	c.dirty = false
 	return nil
+}
+
+func writeEntries(path string, entries map[string]Entry) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(entries, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
