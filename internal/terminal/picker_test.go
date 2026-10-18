@@ -3,9 +3,11 @@ package terminal
 import (
 	"bytes"
 	"errors"
-	"strings"
+	"fmt"
+	"slices"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,108 +39,170 @@ func testPicker() *Picker {
 	})
 }
 
-func TestPickerFilterAndSelection(t *testing.T) {
+func pickerAfter(keys ...Key) *Picker {
 	p := testPicker()
-	if done, cancelled := feed(p, keyOf(KeyDown)); done || cancelled || p.index != 1 {
-		t.Fatalf("index = %d", p.index)
+	feed(p, keys...)
+	return p
+}
+
+func TestPickerSelection(t *testing.T) {
+	cases := map[string]struct {
+		keys []Key
+		want int
+	}{
+		"down":            {keys: []Key{keyOf(KeyDown)}, want: 1},
+		"stays in range":  {keys: []Key{keyOf(KeyDown), keyOf(KeyDown), keyOf(KeyDown)}, want: 2},
+		"up":              {keys: []Key{keyOf(KeyDown), keyOf(KeyDown), keyOf(KeyDown), keyOf(KeyUp)}, want: 1},
+		"filter resets":   {keys: append([]Key{keyOf(KeyDown)}, typed("A")...), want: 0},
+		"up at the start": {keys: []Key{keyOf(KeyUp)}, want: 0},
 	}
-	feed(p, keyOf(KeyDown), keyOf(KeyDown))
-	require.Equal(t, 2, p.index, "index must stay in range, got %d", p.index)
-	feed(p, keyOf(KeyUp))
-	require.Equal(t, 1, p.index, "index = %d", p.index)
-	feed(p, typed("A")...)
-	if got := p.Visible(); len(got) != 3 || p.index != 0 {
-		t.Fatalf("visible = %v, index = %d", got, p.index)
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tc.want, pickerAfter(tc.keys...).index)
+		})
 	}
-	feed(p, typed("m")...)
-	if got := p.Visible(); len(got) != 1 || got[0] != "gamma" {
-		t.Fatalf("visible = %v", got)
+}
+
+func TestPickerDownKeepsRunning(t *testing.T) {
+	done, cancelled := feed(testPicker(), keyOf(KeyDown))
+
+	assert.Equal(t, []bool{false, false}, []bool{done, cancelled})
+}
+
+func TestPickerFilter(t *testing.T) {
+	cases := map[string]struct {
+		filter string
+		want   []string
+	}{
+		"case insensitive": {filter: "A", want: []string{"alpha", "beta", "gamma"}},
+		"narrows":          {filter: "Am", want: []string{"gamma"}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tc.want, pickerAfter(typed(tc.filter)...).Visible())
+		})
 	}
 }
 
 func TestPickerEnterOnEmptyListDoesNothing(t *testing.T) {
-	p := testPicker()
-	feed(p, typed("zzz")...)
-	feed(p, keyOf(KeyEnter))
-	if p.choosing {
-		t.Fatal("must stay on the selection step")
-	}
+	p := pickerAfter(append(typed("zzz"), keyOf(KeyEnter))...)
+
+	assert.False(t, p.choosing)
 }
 
 func TestPickerCancel(t *testing.T) {
 	for _, key := range []KeyKind{KeyEsc, KeyCtrlC} {
-		if _, cancelled := feed(testPicker(), keyOf(key)); !cancelled {
-			t.Errorf("key %v did not cancel", key)
-		}
+		t.Run(fmt.Sprint(key), func(t *testing.T) {
+			_, cancelled := feed(testPicker(), keyOf(key))
+			assert.True(t, cancelled)
+		})
 	}
 }
 
-func TestPickerNameStep(t *testing.T) {
-	p := testPicker()
-	feed(p, keyOf(KeyDown), keyOf(KeyEnter))
-	if !p.choosing || p.chosen != "beta" || p.input.String() != "beta" {
-		t.Fatalf("choosing = %v, chosen = %q, input = %q", p.choosing, p.chosen, p.input.String())
-	}
-	if done, _ := feed(p, keyOf(KeyEnter)); done || p.problem == "" {
-		t.Fatalf("default name must fail validation, problem = %q", p.problem)
-	}
-	if lines := p.Lines(); !strings.Contains(lines[len(lines)-1], Red) {
-		t.Fatalf("problem must be red: %q", lines)
-	}
-	feed(p, keyOf(KeyUp))
-	require.Equal(t, "", p.problem, "any key must clear the problem")
-	feed(p, keyOf(KeyBackspace), keyOf(KeyBackspace), keyOf(KeyBackspace), keyOf(KeyBackspace))
-	feed(p, typed("taken")...)
-	feed(p, keyOf(KeyEnter))
-	if p.problem == "" {
-		t.Fatal("taken name must fail validation")
-	}
-	feed(p, keyOf(KeyBackspace))
-	feed(p, typed("n")...)
-	feed(p, keyOf(KeyBackspace), keyOf(KeyBackspace), keyOf(KeyBackspace), keyOf(KeyBackspace), keyOf(KeyBackspace))
-	feed(p, typed("fresh")...)
-	if done, cancelled := feed(p, keyOf(KeyEnter)); !done || cancelled || p.input.String() != "fresh" {
-		t.Fatalf("done = %v, cancelled = %v, input = %q", done, cancelled, p.input.String())
-	}
+func choosingBeta() *Picker {
+	return pickerAfter(keyOf(KeyDown), keyOf(KeyEnter))
+}
+
+func TestPickerNameStepStarts(t *testing.T) {
+	p := choosingBeta()
+
+	assert.Equal(t, []any{true, "beta", "beta"}, []any{p.choosing, p.chosen, p.input.String()})
+}
+
+func TestPickerNameStepRejectsDefault(t *testing.T) {
+	p := choosingBeta()
+	done, _ := feed(p, keyOf(KeyEnter))
+
+	t.Run("not done", func(t *testing.T) {
+		assert.False(t, done)
+	})
+	t.Run("problem shown", func(t *testing.T) {
+		assert.NotEmpty(t, p.problem)
+	})
+	t.Run("problem is red", func(t *testing.T) {
+		lines := p.Lines()
+		assert.Contains(t, lines[len(lines)-1], Red)
+	})
+}
+
+func TestPickerNameStepClearsProblem(t *testing.T) {
+	p := choosingBeta()
+	feed(p, keyOf(KeyEnter), keyOf(KeyUp))
+
+	assert.Empty(t, p.problem)
+}
+
+func retype(text string) []Key {
+	keys := slices.Repeat([]Key{keyOf(KeyBackspace)}, 10)
+	return append(keys, typed(text)...)
+}
+
+func TestPickerNameStepRejectsTaken(t *testing.T) {
+	p := choosingBeta()
+	feed(p, append(retype("taken"), keyOf(KeyEnter))...)
+
+	assert.NotEmpty(t, p.problem)
+}
+
+func TestPickerNameStepAcceptsFresh(t *testing.T) {
+	p := choosingBeta()
+
+	done, cancelled := feed(p, append(retype("fresh"), keyOf(KeyEnter))...)
+
+	assert.Equal(t, []any{true, false, "fresh"}, []any{done, cancelled, p.input.String()})
 }
 
 func TestPickerEscReturnsToSelection(t *testing.T) {
-	p := testPicker()
-	feed(p, typed("a")...)
-	feed(p, keyOf(KeyDown), keyOf(KeyEnter))
-	if done, cancelled := feed(p, keyOf(KeyEsc)); done || cancelled || p.choosing {
-		t.Fatal("Esc must return to the selection step")
-	}
-	require.Equal(t, "a", p.filter.String(), "filter = %q, must be kept", p.filter.String())
+	p := pickerAfter(append(typed("a"), keyOf(KeyDown), keyOf(KeyEnter))...)
+	done, cancelled := feed(p, keyOf(KeyEsc))
+
+	t.Run("back to selection", func(t *testing.T) {
+		assert.Equal(t, []bool{false, false, false}, []bool{done, cancelled, p.choosing})
+	})
+	t.Run("filter kept", func(t *testing.T) {
+		assert.Equal(t, "a", p.filter.String())
+	})
+}
+
+type scriptedKeys struct {
+	batches [][]Key
+	next    int
+}
+
+func (s *scriptedKeys) read() ([]Key, error) {
+	batch := s.batches[s.next]
+	s.next++
+	return batch, nil
 }
 
 func TestPickerRun(t *testing.T) {
-	p := testPicker()
-	script := [][]Key{
-		{keyOf(KeyDown)},
-		{keyOf(KeyEnter)},
-		typed("2"),
-		{keyOf(KeyEnter)},
-	}
+	keys := &scriptedKeys{batches: [][]Key{{keyOf(KeyDown)}, {keyOf(KeyEnter)}, typed("2"), {keyOf(KeyEnter)}}}
 	var out bytes.Buffer
-	next := 0
-	keys := func() ([]Key, error) {
-		batch := script[next]
-		next++
-		return batch, nil
-	}
-	oldName, newName, cancelled, err := p.Run(keys, NewScreen(&out))
-	if err != nil || cancelled || oldName != "beta" || newName != "beta2" {
-		t.Fatalf("got %q → %q, cancelled = %v, err = %v", oldName, newName, cancelled, err)
-	}
-	require.Contains(t, out.String(), "┌", "the table was not drawn: %q", out.String())
+
+	oldName, newName, cancelled, err := testPicker().Run(keys.read, NewScreen(&out))
+
+	t.Run("result", func(t *testing.T) {
+		require.NoError(t, err)
+		assert.Equal(t, []any{"beta", "beta2", false}, []any{oldName, newName, cancelled})
+	})
+	t.Run("draws the table", func(t *testing.T) {
+		assert.Contains(t, out.String(), "┌")
+	})
 }
 
 func TestPickerRunCancelled(t *testing.T) {
-	p := testPicker()
-	keys := func() ([]Key, error) { return []Key{keyOf(KeyEsc)}, nil }
-	_, _, cancelled, err := p.Run(keys, NewScreen(&bytes.Buffer{}))
-	if err != nil || !cancelled {
-		t.Fatalf("cancelled = %v, err = %v", cancelled, err)
-	}
+	keys := &scriptedKeys{batches: [][]Key{{keyOf(KeyEsc)}}}
+
+	_, _, cancelled, err := testPicker().Run(keys.read, NewScreen(&bytes.Buffer{}))
+
+	require.NoError(t, err)
+	assert.True(t, cancelled)
+}
+
+func TestPickerRunReadError(t *testing.T) {
+	failing := func() ([]Key, error) { return nil, errors.New("read failed") }
+
+	_, _, _, err := testPicker().Run(failing, NewScreen(&bytes.Buffer{}))
+
+	assert.Error(t, err)
 }
