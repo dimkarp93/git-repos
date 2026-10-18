@@ -437,6 +437,8 @@ type evidenceLine struct {
 	text  string
 }
 
+type evidenceLines []evidenceLine
+
 func renderEvidence(ev evidence) []evidenceLine {
 	var lines []evidenceLine
 	add := func(color, format string, args ...any) {
