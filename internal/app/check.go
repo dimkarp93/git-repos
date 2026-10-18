@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/dimkarp93/git-repos/internal/cache"
@@ -101,6 +100,14 @@ type matched struct {
 	remote     provider.Repo
 	originName string
 	remoteName string
+}
+
+func (m matched) label() string {
+	if m.originName != "" {
+		return m.remote.FullName() + " (origin: " + m.originName + ")"
+	}
+
+	return m.remote.FullName()
 }
 
 func (m matched) gitRemote() string {
@@ -271,24 +278,15 @@ func build(ctx context.Context, prov provider.Provider, store *cache.Cache, root
 
 func inspectAll(ctx context.Context, prov provider.Provider, store *cache.Cache, pairs []matched, opts options, pr *progress) []Result {
 	results := make([]Result, len(pairs))
-	sem := make(chan struct{}, opts.jobs)
 	pr.setPhase("checking branches")
 	pr.setTotal(len(pairs))
-	var wg sync.WaitGroup
-	for i, pair := range pairs {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sem <- struct{}{}
-			pr.begin(pair.remote.FullName())
-			defer func() {
-				pr.end()
-				<-sem
-			}()
-			results[i] = inspect(ctx, prov, store, pair, opts)
-		}()
-	}
-	wg.Wait()
+
+	parallel(opts.jobs, len(pairs), func(i int) {
+		pr.begin(pairs[i].remote.FullName())
+		defer pr.end()
+		results[i] = inspect(ctx, prov, store, pairs[i], opts)
+	})
+
 	sort.Slice(results, func(i, j int) bool {
 		if results[i].FullName == results[j].FullName {
 			return results[i].Path < results[j].Path

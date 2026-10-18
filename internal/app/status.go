@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
-	"sync"
 
 	"github.com/dimkarp93/git-repos/internal/gitcmd"
 	"github.com/dimkarp93/git-repos/internal/render"
@@ -138,24 +137,15 @@ func runStatus(args []string) int {
 
 func statusAll(ctx context.Context, locals []scan.Repo, opts options, pr *progress) []statusResult {
 	results := make([]statusResult, len(locals))
-	sem := make(chan struct{}, opts.jobs)
 	pr.setPhase("repository status")
 	pr.setTotal(len(locals))
-	var wg sync.WaitGroup
-	for i, local := range locals {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sem <- struct{}{}
-			pr.begin(shortPath(local.Path))
-			defer func() {
-				pr.end()
-				<-sem
-			}()
-			results[i] = repoStatus(ctx, local.Path)
-		}()
-	}
-	wg.Wait()
+
+	parallel(opts.jobs, len(locals), func(i int) {
+		pr.begin(shortPath(locals[i].Path))
+		defer pr.end()
+		results[i] = repoStatus(ctx, locals[i].Path)
+	})
+
 	sort.Slice(results, func(i, j int) bool { return results[i].path < results[j].path })
 	return results
 }

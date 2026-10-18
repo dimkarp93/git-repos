@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"sort"
-	"sync"
 
 	"github.com/dimkarp93/git-repos/internal/gitcmd"
 	"github.com/dimkarp93/git-repos/internal/render"
@@ -195,35 +194,25 @@ func shortSHA(sha string) string {
 
 func forEachDefault(ctx context.Context, s *session, pairs []matched, opts options, pr *progress, phase string, action branchAction) []ffResult {
 	results := make([]ffResult, len(pairs))
-	sem := make(chan struct{}, max(opts.jobs, 1))
 	pr.setPhase(phase)
 	pr.setTotal(len(pairs))
 
-	var wg sync.WaitGroup
-	for i, pair := range pairs {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sem <- struct{}{}
-			pr.begin(pair.remote.FullName())
-			defer func() {
-				pr.end()
-				<-sem
-			}()
-			branch := resolveBranch(s.store, s.prov.Name(), pair.remote, opts.refresh)
-			name := pair.remote.FullName()
-			if pair.originName != "" {
-				name += " (origin: " + pair.originName + ")"
-			}
-			res := action(ctx, pair.local.Path, pair.gitRemote(), branch)
-			res.FullName = name
-			res.Path = shortPath(pair.local.Path)
-			results[i] = res
-		}()
-	}
-	wg.Wait()
+	parallel(opts.jobs, len(pairs), func(i int) {
+		pr.begin(pairs[i].remote.FullName())
+		defer pr.end()
+		results[i] = runDefault(ctx, s, pairs[i], opts, action)
+	})
+
 	sort.Slice(results, func(i, j int) bool { return results[i].FullName < results[j].FullName })
 	return results
+}
+
+func runDefault(ctx context.Context, s *session, pair matched, opts options, action branchAction) ffResult {
+	branch := resolveBranch(s.store, s.prov.Name(), pair.remote, opts.refresh)
+	res := action(ctx, pair.local.Path, pair.gitRemote(), branch)
+	res.FullName = pair.label()
+	res.Path = shortPath(pair.local.Path)
+	return res
 }
 
 func compareDefault(ctx context.Context, dir, remoteName, branch string) ffResult {

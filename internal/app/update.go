@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"sort"
-	"sync"
 
 	"github.com/dimkarp93/git-repos/internal/gitcmd"
 	"github.com/dimkarp93/git-repos/internal/render"
@@ -71,36 +70,27 @@ func runUpdate(args []string) int {
 
 func fetchAll(ctx context.Context, s *session, pairs []matched, opts options, pr *progress) []fetchResult {
 	results := make([]fetchResult, len(pairs))
-	sem := make(chan struct{}, opts.jobs)
 	pr.setPhase("fetch")
 	pr.setTotal(len(pairs))
 
-	var wg sync.WaitGroup
-	for i, pair := range pairs {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sem <- struct{}{}
-			pr.begin(pair.remote.FullName())
-			defer func() {
-				pr.end()
-				<-sem
-			}()
-			branch := resolveBranch(s.store, s.prov.Name(), pair.remote, opts.refresh)
-			name := pair.remote.FullName()
-			if pair.originName != "" {
-				name += " (origin: " + pair.originName + ")"
-			}
-			res := fetchResult{FullName: name, Path: shortPath(pair.local.Path), Branch: branch}
-			if branch == "" {
-				res.Err = errDefaultBranchUnknown
-			} else {
-				res.Err = gitcmd.Fetch(ctx, pair.local.Path, pair.gitRemote(), branch)
-			}
-			results[i] = res
-		}()
-	}
-	wg.Wait()
+	parallel(opts.jobs, len(pairs), func(i int) {
+		pr.begin(pairs[i].remote.FullName())
+		defer pr.end()
+		results[i] = fetchPair(ctx, s, pairs[i], opts)
+	})
+
 	sort.Slice(results, func(i, j int) bool { return results[i].FullName < results[j].FullName })
 	return results
+}
+
+func fetchPair(ctx context.Context, s *session, pair matched, opts options) fetchResult {
+	branch := resolveBranch(s.store, s.prov.Name(), pair.remote, opts.refresh)
+	res := fetchResult{FullName: pair.label(), Path: shortPath(pair.local.Path), Branch: branch}
+	if branch == "" {
+		res.Err = errDefaultBranchUnknown
+		return res
+	}
+
+	res.Err = gitcmd.Fetch(ctx, pair.local.Path, pair.gitRemote(), branch)
+	return res
 }
