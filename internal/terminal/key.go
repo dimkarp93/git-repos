@@ -28,6 +28,11 @@ type Key struct {
 
 type KeySource func() ([]Key, error)
 
+type stdinReader struct {
+	f   *os.File
+	buf []byte
+}
+
 func StdinKeys(f *os.File) KeySource {
 	buf := make([]byte, 256)
 	return func() ([]Key, error) {
