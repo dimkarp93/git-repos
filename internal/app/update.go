@@ -45,27 +45,44 @@ func runUpdate(args []string) int {
 	results := fetchAll(s.ctx, s, pairs, opts, s.pr)
 	s.spinner.Stop()
 
-	rows := make([][]render.Cell, 0, len(results))
-	failed := 0
-	for _, res := range results {
-		status := render.Cell{Text: "fetched", Color: render.Grey}
-		if res.Err != nil {
-			failed++
-			status = render.Cell{Text: render.Ellipsis("error: "+errText(res.Err), maxDetailWidth), Color: render.Red}
-		}
-		rows = append(rows, []render.Cell{
-			{Text: res.FullName, Color: render.Bold},
-			render.Plain(res.Branch),
-			status,
-			{Text: render.Ellipsis(res.Path, maxPathWidth), Color: render.Grey},
-		})
-	}
-	s.printer.Table("Fetch result", []string{"REPOSITORY", "BRANCH", "RESULT", "PATH"}, rows)
+	failed := countFetchFailed(results)
+	s.printer.Table("Fetch result", []string{"REPOSITORY", "BRANCH", "RESULT", "PATH"}, fetchRows(results))
 	s.printer.Line("", "Summary: updated — %d, errors — %d", len(results)-failed, failed)
 	if failed > 0 {
 		return ExitFailure
 	}
 	return ExitOK
+}
+
+func countFetchFailed(results []fetchResult) int {
+	failed := 0
+	for _, res := range results {
+		if res.Err != nil {
+			failed++
+		}
+	}
+	return failed
+}
+
+func fetchRows(results []fetchResult) [][]render.Cell {
+	rows := make([][]render.Cell, 0, len(results))
+	for _, res := range results {
+		rows = append(rows, []render.Cell{
+			{Text: res.FullName, Color: render.Bold},
+			render.Plain(res.Branch),
+			fetchStatus(res.Err),
+			{Text: render.Ellipsis(res.Path, maxPathWidth), Color: render.Grey},
+		})
+	}
+	return rows
+}
+
+func fetchStatus(err error) render.Cell {
+	if err != nil {
+		return render.Cell{Text: render.Ellipsis("error: "+errText(err), maxDetailWidth), Color: render.Red}
+	}
+
+	return render.Cell{Text: "fetched", Color: render.Grey}
 }
 
 func fetchAll(ctx context.Context, s *session, pairs []matched, opts options, pr *progress) []fetchResult {
