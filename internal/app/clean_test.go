@@ -30,51 +30,44 @@ func exists(path string) bool {
 	return err == nil
 }
 
-func TestCleanLocalPerRepoAnswers(t *testing.T) {
-	root := t.TempDir()
-	items := makeDirs(t, root, "a", "b", "c")
-	var out bytes.Buffer
-	s := newSession(t, bareProvider(t), []string{root}, &out)
-	c := newScriptedConfirmer(strings.NewReader("yes\nskip\nyes\n"), &out, false)
-
-	deleted, failed := s.cleanLocal(items, c)
-	if deleted != 2 || failed != 0 {
-		t.Fatalf("deleted = %d, failed = %d", deleted, failed)
-	}
-	if exists(items[0].Path) || !exists(items[1].Path) || exists(items[2].Path) {
-		t.Fatalf("wrong directories removed")
-	}
+type cleanResult struct {
+	deleted, failed int
+	exists          []bool
+	out             string
 }
 
-func TestCleanLocalSkipToAllStops(t *testing.T) {
+func cleanLocalWith(t *testing.T, answers string) cleanResult {
+	t.Helper()
+
 	root := t.TempDir()
 	items := makeDirs(t, root, "a", "b", "c")
 	var out bytes.Buffer
 	s := newSession(t, bareProvider(t), []string{root}, &out)
-	c := newScriptedConfirmer(strings.NewReader("yes\nskip-to-all\nyes\n"), &out, false)
 
-	deleted, _ := s.cleanLocal(items, c)
-	require.Equal(t, 1, deleted, "deleted = %d", deleted)
-	if exists(items[0].Path) || !exists(items[1].Path) || !exists(items[2].Path) {
-		t.Fatalf("skip-to-all did not stop the command")
-	}
-}
+	deleted, failed := s.cleanLocal(items, newScriptedConfirmer(strings.NewReader(answers), &out, false))
 
-func TestCleanLocalYesToAllDeletesRest(t *testing.T) {
-	root := t.TempDir()
-	items := makeDirs(t, root, "a", "b", "c")
-	var out bytes.Buffer
-	s := newSession(t, bareProvider(t), []string{root}, &out)
-	c := newScriptedConfirmer(strings.NewReader("yes-to-all\n"), &out, false)
-
-	deleted, failed := s.cleanLocal(items, c)
-	if deleted != 3 || failed != 0 {
-		t.Fatalf("deleted = %d, failed = %d", deleted, failed)
-	}
+	res := cleanResult{deleted: deleted, failed: failed, out: out.String()}
 	for _, item := range items {
-		if exists(item.Path) {
-			t.Fatalf("%s survived", item.Path)
-		}
+		res.exists = append(res.exists, exists(item.Path))
+	}
+	return res
+}
+
+func TestCleanLocalAnswers(t *testing.T) {
+	cases := map[string]struct {
+		answers string
+		want    cleanResult
+	}{
+		"per repository": {answers: "yes\nskip\nyes\n", want: cleanResult{deleted: 2, exists: []bool{false, true, false}}},
+		"skip-to-all":    {answers: "yes\nskip-to-all\nyes\n", want: cleanResult{deleted: 1, exists: []bool{false, true, true}}},
+		"yes-to-all":     {answers: "yes-to-all\n", want: cleanResult{deleted: 3, exists: []bool{false, false, false}}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := cleanLocalWith(t, tc.answers)
+			got.out = ""
+			assert.Equal(t, tc.want, got)
+		})
 	}
 }
 
@@ -85,61 +78,71 @@ func TestCleanLocalWarnsAboutDirtyTree(t *testing.T) {
 	git(t, dir, "init", "--initial-branch=main", "--quiet")
 	commit(t, dir, "a.txt")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("changed"), 0o644))
-
 	var out bytes.Buffer
 	s := newSession(t, bareProvider(t), []string{root}, &out)
-	c := newScriptedConfirmer(strings.NewReader("skip\n"), &out, false)
-	s.cleanLocal([]LocalOnly{{Path: dir, Kind: KindNoOrigin, Reason: "no origin"}}, c)
-	require.Contains(t, out.String(), "uncommitted changes", "no dirty warning: %q", out.String())
+
+	s.cleanLocal([]LocalOnly{{Path: dir, Kind: KindNoOrigin, Reason: "no origin"}}, newScriptedConfirmer(strings.NewReader("skip\n"), &out, false))
+
+	assert.Contains(t, out.String(), "uncommitted changes")
+}
+
+func remoteItems(names ...string) []RemoteOnly {
+	items := make([]RemoteOnly, 0, len(names))
+	for _, name := range names {
+		items = append(items, RemoteOnly{FullName: "tester/" + name, repo: provider.Repo{Owner: "tester", Name: name}})
+	}
+	return items
+}
+
+func cleanRemoteWith(t *testing.T, prov *fakeProvider, answers string, names ...string) cleanResult {
+	t.Helper()
+
+	var out bytes.Buffer
+	s := newSession(t, prov, []string{t.TempDir()}, &out)
+
+	deleted, failed := s.cleanRemote(remoteItems(names...), newScriptedConfirmer(strings.NewReader(answers), &out, false))
+	return cleanResult{deleted: deleted, failed: failed, out: out.String()}
 }
 
 func TestCleanRemoteAnswers(t *testing.T) {
 	prov := bareProvider(t)
-	items := []RemoteOnly{
-		{FullName: "tester/a", repo: provider.Repo{Owner: "tester", Name: "a"}},
-		{FullName: "tester/b", repo: provider.Repo{Owner: "tester", Name: "b"}},
-		{FullName: "tester/c", repo: provider.Repo{Owner: "tester", Name: "c"}},
-	}
-	var out bytes.Buffer
-	s := newSession(t, prov, []string{t.TempDir()}, &out)
-	c := newScriptedConfirmer(strings.NewReader("skip\nyes\nyes\n"), &out, false)
+	res := cleanRemoteWith(t, prov, "skip\nyes\nyes\n", "a", "b", "c")
 
-	deleted, failed := s.cleanRemote(items, c)
-	if deleted != 2 || failed != 0 {
-		t.Fatalf("deleted = %d, failed = %d", deleted, failed)
-	}
-	if strings.Join(prov.deleted, ",") != "tester/b,tester/c" {
-		t.Fatalf("deleted = %v", prov.deleted)
-	}
+	t.Run("counts", func(t *testing.T) {
+		assert.Equal(t, []int{2, 0}, []int{res.deleted, res.failed})
+	})
+	t.Run("deleted repositories", func(t *testing.T) {
+		assert.Equal(t, []string{"tester/b", "tester/c"}, prov.deleted)
+	})
 }
 
 func TestCleanRemoteCountsErrors(t *testing.T) {
 	prov := bareProvider(t)
 	prov.failOn = map[string]error{"delete:tester/a": errors.New("no delete_repo scope")}
-	items := []RemoteOnly{{FullName: "tester/a", repo: provider.Repo{Owner: "tester", Name: "a"}}}
-	var out bytes.Buffer
-	s := newSession(t, prov, []string{t.TempDir()}, &out)
-	c := newScriptedConfirmer(strings.NewReader("yes\n"), &out, false)
+	res := cleanRemoteWith(t, prov, "yes\n", "a")
 
-	deleted, failed := s.cleanRemote(items, c)
-	if deleted != 0 || failed != 1 {
-		t.Fatalf("deleted = %d, failed = %d", deleted, failed)
-	}
-	assert.Contains(t, out.String(), "no delete_repo scope", "error not reported: %q", out.String())
+	t.Run("counts", func(t *testing.T) {
+		assert.Equal(t, []int{0, 1}, []int{res.deleted, res.failed})
+	})
+	t.Run("reports error", func(t *testing.T) {
+		assert.Contains(t, res.out, "no delete_repo scope")
+	})
 }
 
 func TestCleanRemoteYesToAll(t *testing.T) {
 	prov := bareProvider(t)
-	items := []RemoteOnly{
-		{FullName: "tester/a", repo: provider.Repo{Owner: "tester", Name: "a"}},
-		{FullName: "tester/b", repo: provider.Repo{Owner: "tester", Name: "b"}},
-	}
-	var out bytes.Buffer
-	s := newSession(t, prov, []string{t.TempDir()}, &out)
-	c := newScriptedConfirmer(strings.NewReader("yes-to-all\n"), &out, false)
+	res := cleanRemoteWith(t, prov, "yes-to-all\n", "a", "b")
 
-	deleted, _ := s.cleanRemote(items, c)
-	if deleted != 2 || len(prov.deleted) != 2 {
-		t.Fatalf("deleted = %d, %v", deleted, prov.deleted)
-	}
+	t.Run("count", func(t *testing.T) {
+		assert.Equal(t, 2, res.deleted)
+	})
+	t.Run("deleted repositories", func(t *testing.T) {
+		assert.Len(t, prov.deleted, 2)
+	})
+}
+
+func TestRemoteNote(t *testing.T) {
+	item := RemoteOnly{Archived: true, repo: provider.Repo{Private: true}}
+
+	assert.Equal(t, "\n  the repository is archived\n  the repository is private", remoteNote(item))
 }
