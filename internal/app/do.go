@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/dimkarp93/git-repos/internal/render"
+	"github.com/dimkarp93/git-repos/internal/scan"
 )
 
 func doFlags(opts *options) *flag.FlagSet {
@@ -22,26 +23,9 @@ func doFlags(opts *options) *flag.FlagSet {
 }
 
 func runDo(args []string) int {
-	opts := options{}
-	fs := doFlags(&opts)
-	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return ExitOK
-		}
-		return ExitFailure
-	}
-	action := fs.Args()
-	if len(action) == 0 {
-		fmt.Fprintln(os.Stderr, "git-repos: no command given, for example: git-repos do --in-develop git status -s")
-		return ExitFailure
-	}
-	explicit := map[string]bool{}
-	fs.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
-	if !explicit["timeout"] {
-		opts.timeout = 0
-	}
-	if explicit["jobs"] {
-		fmt.Fprintln(os.Stderr, "git-repos: do always runs sequentially, -jobs is ignored")
+	opts, action, code, ok := parseDo(args)
+	if !ok {
+		return code
 	}
 
 	s, err := startFor(opts, opts.filters.anyView())
@@ -58,11 +42,7 @@ func runDo(args []string) int {
 		return fail(err)
 	}
 	if len(targets) == 0 {
-		if opts.filters.any() {
-			s.printer.Line(render.Grey, "Nothing matched the filter %s.", opts.filters.names())
-		} else {
-			s.printer.Line(render.Grey, "No local repositories found.")
-		}
+		printNoTargets(s.printer, opts.filters)
 		return ExitOK
 	}
 
@@ -74,6 +54,47 @@ func runDo(args []string) int {
 		return ExitOK
 	}
 	return execAll(s, targets, script)
+}
+
+func parseDo(args []string) (options, []string, int, bool) {
+	opts := options{}
+	fs := doFlags(&opts)
+	if err := fs.Parse(args); err != nil {
+		return opts, nil, parseExit(err), false
+	}
+
+	action := fs.Args()
+	if len(action) == 0 {
+		fmt.Fprintln(os.Stderr, "git-repos: no command given, for example: git-repos do --in-develop git status -s")
+		return opts, nil, ExitFailure, false
+	}
+
+	explicit := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
+	if !explicit["timeout"] {
+		opts.timeout = 0
+	}
+	if explicit["jobs"] {
+		fmt.Fprintln(os.Stderr, "git-repos: do always runs sequentially, -jobs is ignored")
+	}
+	return opts, action, ExitOK, true
+}
+
+func parseExit(err error) int {
+	if errors.Is(err, flag.ErrHelp) {
+		return ExitOK
+	}
+
+	return ExitFailure
+}
+
+func printNoTargets(p *render.Printer, f filters) {
+	if f.any() {
+		p.Line(render.Grey, "Nothing matched the filter %s.", f.names())
+		return
+	}
+
+	p.Line(render.Grey, "No local repositories found.")
 }
 
 func execAll(s *session, targets []string, script string) int {
@@ -156,63 +177,78 @@ type dirSet struct {
 }
 
 func selectRepos(s *session, opts options) ([]string, error) {
-	seen := map[string]bool{}
-	var out []string
-	keep := func(dir string) {
-		if dir == "" || seen[dir] {
-			return
-		}
-		seen[dir] = true
-		out = append(out, dir)
+	set := &dirSet{seen: map[string]bool{}}
+	var err error
+	if opts.filters.anyView() {
+		err = providerTargets(s, opts, set)
+	} else {
+		err = localTargets(s, opts, set)
 	}
-
-	if !opts.filters.anyView() {
-		locals, err := scanLocal(s.cfg, opts, s.roots, s.pr, s.store)
-		if err != nil {
-			return nil, err
-		}
-		if !opts.filters.anyStatus() {
-			for _, local := range locals {
-				keep(local.Path)
-			}
-			sort.Strings(out)
-			return out, nil
-		}
-		for _, res := range statusAll(s.ctx, locals, opts, s.pr) {
-			if opts.filters.matchStatus(res) {
-				keep(res.dir)
-			}
-		}
-		sort.Strings(out)
-		return out, nil
-	}
-
-	pairs, inv, err := collect(s.ctx, s.prov, s.store, s.cfg, s.roots, opts, s.pr)
 	if err != nil {
 		return nil, err
 	}
+
+	sort.Strings(set.out)
+	return set.out, nil
+}
+
+func (d *dirSet) add(dir string) {
+	if dir == "" || d.seen[dir] {
+		return
+	}
+
+	d.seen[dir] = true
+	d.out = append(d.out, dir)
+}
+
+func (d *dirSet) addStatus(s *session, locals []scan.Repo, opts options) {
+	for _, res := range statusAll(s.ctx, locals, opts, s.pr) {
+		if opts.filters.matchStatus(res) {
+			d.add(res.dir)
+		}
+	}
+}
+
+func localTargets(s *session, opts options, set *dirSet) error {
+	locals, err := scanLocal(s.cfg, opts, s.roots, s.pr, s.store)
+	if err != nil {
+		return err
+	}
+
+	if opts.filters.anyStatus() {
+		set.addStatus(s, locals, opts)
+		return nil
+	}
+	for _, local := range locals {
+		set.add(local.Path)
+	}
+	return nil
+}
+
+func providerTargets(s *session, opts options, set *dirSet) error {
+	pairs, inv, err := collect(s.ctx, s.prov, s.store, s.cfg, s.roots, opts, s.pr)
+	if err != nil {
+		return err
+	}
+
 	if opts.filters.local {
 		for _, item := range inv.localOnly {
-			keep(item.Path)
+			set.add(item.Path)
 		}
 	}
 	if opts.filters.remote && len(inv.remoteOnly) > 0 {
 		fmt.Fprintf(os.Stderr, "git-repos: %d repositories exist only on the remote with no local copy — skipped\n", len(inv.remoteOnly))
 	}
+
 	for _, res := range inspectAll(s.ctx, s.prov, s.store, pairs, opts, s.pr) {
 		if opts.filters.matchResult(res) {
-			keep(res.dir)
+			set.add(res.dir)
 		}
 	}
 	if opts.filters.anyStatus() {
-		for _, res := range statusAll(s.ctx, inv.locals, opts, s.pr) {
-			if opts.filters.matchStatus(res) {
-				keep(res.dir)
-			}
-		}
+		set.addStatus(s, inv.locals, opts)
 	}
-	sort.Strings(out)
-	return out, nil
+	return nil
 }
 
 func startFor(opts options, needProvider bool) (*session, error) {
