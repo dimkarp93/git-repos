@@ -61,26 +61,40 @@ func (p *Picker) handleSelect(key Key) (done, cancelled bool) {
 	case KeyEsc:
 		return false, true
 	case KeyDown, KeyTab:
-		if p.index < len(visible)-1 {
-			p.index++
-		}
+		p.moveDown(len(visible))
 	case KeyUp:
-		if p.index > 0 {
-			p.index--
-		}
+		p.moveUp()
 	case KeyEnter:
-		if len(visible) > 0 {
-			p.chosen = visible[p.index]
-			p.input = NewEditor(p.chosen)
-			p.choosing = true
-			p.problem = ""
-		}
+		p.startChoosing(visible)
 	default:
 		if p.filter.Handle(key) {
 			p.index = 0
 		}
 	}
 	return false, false
+}
+
+func (p *Picker) moveDown(n int) {
+	if p.index < n-1 {
+		p.index++
+	}
+}
+
+func (p *Picker) moveUp() {
+	if p.index > 0 {
+		p.index--
+	}
+}
+
+func (p *Picker) startChoosing(visible []string) {
+	if len(visible) == 0 {
+		return
+	}
+
+	p.chosen = visible[p.index]
+	p.input = NewEditor(p.chosen)
+	p.choosing = true
+	p.problem = ""
 }
 
 func (p *Picker) handleInput(key Key) (done, cancelled bool) {
