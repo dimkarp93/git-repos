@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/dimkarp93/git-repos/internal/gitcmd"
 	"github.com/dimkarp93/git-repos/internal/render"
@@ -33,41 +34,60 @@ func runCleanLocal(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
+	return s.cleanOrphans(inv, opts)
+}
 
-	candidates := make([]LocalOnly, 0, len(inv.localOnly))
-	for _, item := range inv.localOnly {
-		if item.Orphan() {
-			candidates = append(candidates, item)
-		}
-	}
+func (s *session) cleanOrphans(inv inventory, opts options) int {
+	candidates := orphans(inv.localOnly)
 	if len(candidates) == 0 {
 		s.printer.Line(render.Grey, "No local repositories without a remote.")
 		return ExitOK
 	}
 
-	g, err := newGuard(s.ctx, nil)
+	candidates, blocked, err := s.guardLocal(candidates)
 	if err != nil {
 		return fail(err)
 	}
-	var blocked []skippedRepo
-	candidates, blocked = guardCandidates(g, candidates)
-	printSkipped(s.printer, blocked)
 
 	if opts.dryRun {
-		for _, item := range candidates {
-			s.printer.Line(render.Orange, "  %s (%s)", shortPath(item.Path), item.Reason)
-		}
-		s.printer.Line("", "Deletion candidates: %d", len(candidates))
+		printLocalCandidates(s.printer, candidates)
 		return exitSkipped(blocked)
 	}
 
-	c := newConfirmer(opts.assumeYes)
-	deleted, failed := s.cleanLocal(candidates, c)
+	deleted, failed := s.cleanLocal(candidates, newConfirmer(opts.assumeYes))
 	printCleanSummary(s, deleted, failed)
 	if failed > 0 || len(blocked) > 0 {
 		return ExitFailure
 	}
 	return ExitOK
+}
+
+func orphans(items []LocalOnly) []LocalOnly {
+	out := make([]LocalOnly, 0, len(items))
+	for _, item := range items {
+		if item.Orphan() {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func printLocalCandidates(p *render.Printer, candidates []LocalOnly) {
+	for _, item := range candidates {
+		p.Line(render.Orange, "  %s (%s)", shortPath(item.Path), item.Reason)
+	}
+	p.Line("", "Deletion candidates: %d", len(candidates))
+}
+
+func (s *session) guardLocal(candidates []LocalOnly) ([]LocalOnly, []skippedRepo, error) {
+	g, err := newGuard(s.ctx, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	kept, blocked := guardCandidates(g, candidates)
+	printSkipped(s.printer, blocked)
+	return kept, blocked, nil
 }
 
 func guardCandidates(g *guard, candidates []LocalOnly) ([]LocalOnly, []skippedRepo) {
@@ -147,15 +167,11 @@ func runCleanRemote(args []string) int {
 	}
 
 	if opts.dryRun {
-		for _, item := range inv.remoteOnly {
-			s.printer.Line(render.Yellow, "  %s", item.FullName)
-		}
-		s.printer.Line("", "Deletion candidates: %d", len(inv.remoteOnly))
+		printRemoteCandidates(s.printer, inv.remoteOnly)
 		return ExitOK
 	}
 
-	c := newConfirmer(opts.assumeYes)
-	deleted, failed := s.cleanRemote(inv.remoteOnly, c)
+	deleted, failed := s.cleanRemote(inv.remoteOnly, newConfirmer(opts.assumeYes))
 	printCleanSummary(s, deleted, failed)
 	if failed > 0 {
 		return ExitFailure
@@ -163,16 +179,27 @@ func runCleanRemote(args []string) int {
 	return ExitOK
 }
 
+func printRemoteCandidates(p *render.Printer, candidates []RemoteOnly) {
+	for _, item := range candidates {
+		p.Line(render.Yellow, "  %s", item.FullName)
+	}
+	p.Line("", "Deletion candidates: %d", len(candidates))
+}
+
+func remoteNote(item RemoteOnly) string {
+	var notes []string
+	if item.Archived {
+		notes = append(notes, "\n  the repository is archived")
+	}
+	if item.repo.Private {
+		notes = append(notes, "\n  the repository is private")
+	}
+	return strings.Join(notes, "")
+}
+
 func (s *session) cleanRemote(candidates []RemoteOnly, c *confirmer) (deleted, failed int) {
 	for _, item := range candidates {
-		note := ""
-		if item.Archived {
-			note = "\n  the repository is archived"
-		}
-		if item.repo.Private {
-			note += "\n  the repository is private"
-		}
-		prompt := fmt.Sprintf("Delete %s %s?%s\n  %s", s.prov.Name(), item.FullName, note, item.WebURL)
+		prompt := fmt.Sprintf("Delete %s %s?%s\n  %s", s.prov.Name(), item.FullName, remoteNote(item), item.WebURL)
 		ans, err := c.ask(prompt)
 		if err != nil {
 			s.printer.Line(render.Red, "  %v", err)
