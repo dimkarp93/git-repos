@@ -9,6 +9,8 @@ import (
 	"time"
 	"unicode/utf8"
 	"unsafe"
+
+	"github.com/dimkarp93/utils/pkg/collections"
 )
 
 const (
@@ -145,19 +147,11 @@ func headerCells(headers []string) []Cell {
 func (p *Printer) row(cells []Cell, widths []int) string {
 	out := make([]string, 0, len(widths))
 	for i, width := range widths {
-		cell := cellAt(cells, i)
+		cell := collections.At(cells, i)
 		text := Ellipsis(cell.Text, width)
 		out = append(out, " "+p.paintCell(cell, text)+strings.Repeat(" ", gap(text, width))+" ")
 	}
 	return "│" + strings.Join(out, "│") + "│"
-}
-
-func cellAt(cells []Cell, i int) Cell {
-	if i < len(cells) {
-		return cells[i]
-	}
-
-	return Cell{}
 }
 
 func (p *Printer) paintCell(cell Cell, text string) string {
