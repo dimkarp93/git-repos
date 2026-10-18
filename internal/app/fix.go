@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -81,11 +82,8 @@ func runFix(args []string) int {
 	if ok, code := parseFlags(fs, args); !ok {
 		return code
 	}
-	if opts.protocol != "" && opts.protocol != provider.ProtocolSSH && opts.protocol != provider.ProtocolHTTPS {
-		return fail(errors.New("--protocol accepts ssh or https"))
-	}
-	if opts.minSimilarity <= 0 || opts.minSimilarity > 1 {
-		return fail(errors.New("--min-similarity accepts a value above 0 and up to 1"))
+	if err := validateFix(opts); err != nil {
+		return fail(err)
 	}
 
 	s, err := start(opts)
@@ -101,12 +99,7 @@ func runFix(args []string) int {
 		s.spinner.Stop()
 		return fail(err)
 	}
-	var candidates []localMatches
-	if len(inv.localOnly) > 0 && len(inv.remoteOnly) > 0 {
-		locals := s.localFacts(inv.localOnly, inv.remotes, opts)
-		remotes := s.remoteFacts(inv.remoteOnly, opts)
-		candidates = s.findMatches(locals, remotes, opts)
-	}
+	candidates := s.fixCandidates(inv, opts)
 	s.spinner.Stop()
 
 	differ := differentNames(inv.pairs)
@@ -115,25 +108,63 @@ func runFix(args []string) int {
 		return ExitOK
 	}
 
+	stats, err := s.applyFix(inv, candidates, differ, opts)
+	if err != nil {
+		return fail(err)
+	}
+	return s.fixSummary(len(candidates), stats, opts)
+}
+
+func validateFix(opts options) error {
+	if opts.protocol != "" && opts.protocol != provider.ProtocolSSH && opts.protocol != provider.ProtocolHTTPS {
+		return errors.New("--protocol accepts ssh or https")
+	}
+	if opts.minSimilarity <= 0 || opts.minSimilarity > 1 {
+		return errors.New("--min-similarity accepts a value above 0 and up to 1")
+	}
+	return nil
+}
+
+func (s *session) fixCandidates(inv inventory, opts options) []localMatches {
+	if len(inv.localOnly) == 0 || len(inv.remoteOnly) == 0 {
+		return nil
+	}
+
+	locals := s.localFacts(inv.localOnly, inv.remotes, opts)
+	remotes := s.remoteFacts(inv.remoteOnly, opts)
+	return s.findMatches(locals, remotes, opts)
+}
+
+func (s *session) applyFix(inv inventory, candidates []localMatches, differ []matched, opts options) (fixStats, error) {
 	var c *confirmer
 	if !opts.dryRun {
 		c = newConfirmer(opts.assumeYes)
 	}
+
 	stats := s.linkMatches(candidates, c, opts)
-	if !stats.stopped {
-		namePairs := append(stats.linkedPairs, differ...)
-		if len(namePairs) > 0 {
-			if s.guard, err = newGuard(s.ctx, append(append([]matched{}, inv.pairs...), stats.linkedPairs...)); err != nil {
-				return fail(err)
-			}
-		}
-		s.syncNames(namePairs, inv.remotes, c, opts, &stats)
+	if stats.stopped {
+		return stats, nil
 	}
+
+	namePairs := slices.Concat(stats.linkedPairs, differ)
+	if len(namePairs) > 0 {
+		g, err := newGuard(s.ctx, slices.Concat(inv.pairs, stats.linkedPairs))
+		if err != nil {
+			return stats, err
+		}
+		s.guard = g
+	}
+	s.syncNames(namePairs, inv.remotes, c, opts, &stats)
+	return stats, nil
+}
+
+func (s *session) fixSummary(candidates int, stats fixStats, opts options) int {
 	printSkipped(s.printer, stats.blocked)
 	if opts.dryRun {
-		s.printer.Line("", "Summary: possible links — %d · names differ — %d", len(candidates), stats.namesDiffer)
+		s.printer.Line("", "Summary: possible links — %d · names differ — %d", candidates, stats.namesDiffer)
 		return ExitOK
 	}
+
 	s.printer.Line("", "Summary: linked — %d · renamed — %d · skipped — %d · errors — %d", stats.linked, stats.renamed, stats.skipped, stats.failed)
 	if stats.failed > 0 || len(stats.blocked) > 0 {
 		return ExitFailure
