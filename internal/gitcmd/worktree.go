@@ -62,31 +62,37 @@ func Worktrees(ctx context.Context, dir string) ([]Worktree, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	return parseWorktrees(out), nil
+}
+
+func parseWorktrees(out string) []Worktree {
 	var list []Worktree
 	for _, line := range strings.Split(out, "\n") {
 		key, value, _ := strings.Cut(strings.TrimRight(line, "\r"), " ")
-		if key == "worktree" {
+		switch {
+		case key == "worktree":
 			list = append(list, Worktree{Path: value})
-			continue
-		}
-		if len(list) == 0 {
-			continue
-		}
-		cur := &list[len(list)-1]
-		switch key {
-		case "HEAD":
-			cur.Head = value
-		case "branch":
-			cur.Branch = strings.TrimPrefix(value, "refs/heads/")
-		case "detached":
-			cur.Detached = true
-		case "prunable":
-			cur.Prunable = true
-		case "locked":
-			cur.Locked = true
-		case "bare":
-			cur.Bare = true
+		case len(list) > 0:
+			list[len(list)-1].set(key, value)
 		}
 	}
-	return list, nil
+	return list
+}
+
+func (w *Worktree) set(key, value string) {
+	switch key {
+	case "HEAD":
+		w.Head = value
+	case "branch":
+		w.Branch = strings.TrimPrefix(value, "refs/heads/")
+	case "detached":
+		w.Detached = true
+	case "prunable":
+		w.Prunable = true
+	case "locked":
+		w.Locked = true
+	case "bare":
+		w.Bare = true
+	}
 }
