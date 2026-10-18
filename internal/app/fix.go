@@ -157,35 +157,45 @@ func (s *session) localFacts(items []LocalOnly, account []provider.Repo, opts op
 	for _, repo := range account {
 		existing[strings.ToLower(repo.FullName())] = true
 	}
+
+	usable := s.usableLocals(items)
+	out := make([]*localFacts, len(usable))
+	s.pr.setPhase("reading local history")
+	s.pr.setUnit("repositories")
+	s.pr.setTotal(len(usable))
+	parallel(opts.jobs, len(usable), func(i int) {
+		s.pr.begin(shortPath(usable[i].Path))
+		defer s.pr.end()
+		out[i] = s.readLocalFacts(usable[i], existing)
+	})
+	return out
+}
+
+func (s *session) usableLocals(items []LocalOnly) []LocalOnly {
 	usable := make([]LocalOnly, 0, len(items))
 	for _, item := range items {
 		if item.Kind != KindUnreadable && item.Kind != KindNonOrigin && gitcmd.HasCommits(s.ctx, item.Path) {
 			usable = append(usable, item)
 		}
 	}
-	out := make([]*localFacts, len(usable))
-	s.pr.setPhase("reading local history")
-	s.pr.setUnit("repositories")
-	s.pr.setTotal(len(usable))
-	parallel(opts.jobs, len(usable), func(i int) {
-		item := usable[i]
-		s.pr.begin(shortPath(item.Path))
-		defer s.pr.end()
-		facts := &localFacts{item: item, roots: map[string]bool{}, blobs: map[string]string{}}
-		facts.originURL, _ = gitcmd.OriginURL(s.ctx, item.Path)
-		facts.dead = s.deadRemotes(item.Path, existing)
-		facts.commits, _ = gitcmd.AllCommits(s.ctx, item.Path)
-		roots, _ := gitcmd.RootCommits(s.ctx, item.Path)
-		for _, root := range roots {
-			facts.roots[root] = true
-		}
-		blobs, _ := gitcmd.TreeBlobs(s.ctx, item.Path, "HEAD")
-		for _, blob := range blobs {
-			facts.blobs[blob.Path] = blob.SHA
-		}
-		out[i] = facts
-	})
-	return out
+	return usable
+}
+
+func (s *session) readLocalFacts(item LocalOnly, existing map[string]bool) *localFacts {
+	facts := &localFacts{item: item, roots: map[string]bool{}, blobs: map[string]string{}}
+	facts.originURL, _ = gitcmd.OriginURL(s.ctx, item.Path)
+	facts.dead = s.deadRemotes(item.Path, existing)
+	facts.commits, _ = gitcmd.AllCommits(s.ctx, item.Path)
+
+	roots, _ := gitcmd.RootCommits(s.ctx, item.Path)
+	for _, root := range roots {
+		facts.roots[root] = true
+	}
+	blobs, _ := gitcmd.TreeBlobs(s.ctx, item.Path, "HEAD")
+	for _, blob := range blobs {
+		facts.blobs[blob.Path] = blob.SHA
+	}
+	return facts
 }
 
 func (s *session) deadRemotes(dir string, existing map[string]bool) []deadRemote {
@@ -212,15 +222,11 @@ func (s *session) remoteFacts(items []RemoteOnly, opts options) []*remoteFacts {
 	s.pr.setUnit("repositories")
 	s.pr.setTotal(len(items))
 	parallel(opts.jobs, len(items), func(i int) {
-		item := items[i]
-		s.pr.begin(item.FullName)
+		s.pr.begin(items[i].FullName)
 		defer s.pr.end()
-		history, err := s.prov.History(s.ctx, item.repo.Owner, item.repo.Name, item.repo.DefaultBranch)
-		if err != nil {
-			return
-		}
-		all[i] = &remoteFacts{item: item, history: history}
+		all[i] = s.readRemoteFacts(items[i])
 	})
+
 	out := make([]*remoteFacts, 0, len(all))
 	for _, facts := range all {
 		if facts != nil {
@@ -228,6 +234,15 @@ func (s *session) remoteFacts(items []RemoteOnly, opts options) []*remoteFacts {
 		}
 	}
 	return out
+}
+
+func (s *session) readRemoteFacts(item RemoteOnly) *remoteFacts {
+	history, err := s.prov.History(s.ctx, item.repo.Owner, item.repo.Name, item.repo.DefaultBranch)
+	if err != nil {
+		return nil
+	}
+
+	return &remoteFacts{item: item, history: history}
 }
 
 type localMatches struct {
