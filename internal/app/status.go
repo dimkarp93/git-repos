@@ -84,36 +84,7 @@ func runStatus(args []string) int {
 	results := statusAll(s.ctx, locals, opts, s.pr)
 	s.spinner.Stop()
 
-	rows := make([][]render.Cell, 0, len(results))
-	features, dirty, failed, shown := 0, 0, 0, 0
-	for _, res := range results {
-		if !opts.filters.matchStatus(res) {
-			continue
-		}
-		shown++
-		branch := render.Plain(res.branch)
-		marks := render.Cell{}
-		switch {
-		case res.err != nil:
-			failed++
-			branch = render.Cell{Text: render.Ellipsis(errText(res.err), maxDetailWidth), Color: render.Red}
-		default:
-			if res.feature {
-				features++
-				branch = render.Cell{Text: res.branch, Color: render.Blue}
-			}
-			if res.dirty {
-				dirty++
-			}
-			marks = markCell(res)
-		}
-		rows = append(rows, []render.Cell{
-			{Text: res.name, Color: render.Bold},
-			branch,
-			marks,
-			{Text: render.Ellipsis(res.path, maxPathWidth), Color: render.Grey},
-		})
-	}
+	rows, sum := statusRows(results, opts.filters)
 	if len(rows) == 0 {
 		if opts.filters.any() {
 			s.printer.Line(render.Grey, "Nothing matched the filter %s.", opts.filters.names())
@@ -122,21 +93,74 @@ func runStatus(args []string) int {
 		s.printer.Line(render.Grey, "No local repositories found.")
 		return ExitOK
 	}
+
 	s.printer.Table("Local repository status", []string{"REPOSITORY", "BRANCH", "MARKS", "PATH"}, rows)
-	line := fmt.Sprintf("Summary: repositories — %d · %s · %s · errors — %d",
-		shown,
-		s.printer.Colored(render.Magenta, fmt.Sprintf("not on the default branch — %d", features)),
-		s.printer.Colored(render.Yellow, fmt.Sprintf("with changes — %d", dirty)),
-		failed,
-	)
-	if opts.filters.any() {
-		line += " · filter: " + opts.filters.names()
-	}
-	s.printer.Line("", "%s", line)
-	if failed > 0 {
+	s.printer.Line("", "%s", sum.line(s.printer, opts.filters))
+	if sum.failed > 0 {
 		return ExitFailure
 	}
 	return ExitOK
+}
+
+func statusRows(results []statusResult, f filters) ([][]render.Cell, statusSummary) {
+	rows := make([][]render.Cell, 0, len(results))
+	var sum statusSummary
+	for _, res := range results {
+		if f.matchStatus(res) {
+			sum.add(res)
+			rows = append(rows, statusRow(res))
+		}
+	}
+	return rows, sum
+}
+
+func (s *statusSummary) add(res statusResult) {
+	s.shown++
+	if res.err != nil {
+		s.failed++
+		return
+	}
+
+	if res.feature {
+		s.features++
+	}
+	if res.dirty {
+		s.dirty++
+	}
+}
+
+func statusRow(res statusResult) []render.Cell {
+	branch, marks := statusCells(res)
+	return []render.Cell{
+		{Text: res.name, Color: render.Bold},
+		branch,
+		marks,
+		{Text: render.Ellipsis(res.path, maxPathWidth), Color: render.Grey},
+	}
+}
+
+func statusCells(res statusResult) (render.Cell, render.Cell) {
+	switch {
+	case res.err != nil:
+		return render.Cell{Text: render.Ellipsis(errText(res.err), maxDetailWidth), Color: render.Red}, render.Cell{}
+	case res.feature:
+		return render.Cell{Text: res.branch, Color: render.Blue}, markCell(res)
+	default:
+		return render.Plain(res.branch), markCell(res)
+	}
+}
+
+func (s statusSummary) line(p *render.Printer, f filters) string {
+	line := fmt.Sprintf("Summary: repositories — %d · %s · %s · errors — %d",
+		s.shown,
+		p.Colored(render.Magenta, fmt.Sprintf("not on the default branch — %d", s.features)),
+		p.Colored(render.Yellow, fmt.Sprintf("with changes — %d", s.dirty)),
+		s.failed,
+	)
+	if f.any() {
+		return line + " · filter: " + f.names()
+	}
+	return line
 }
 
 func statusAll(ctx context.Context, locals []scan.Repo, opts options, pr *progress) []statusResult {
@@ -156,16 +180,8 @@ func statusAll(ctx context.Context, locals []scan.Repo, opts options, pr *progre
 
 func repoStatus(ctx context.Context, path string) statusResult {
 	res := statusResult{dir: path, name: filepath.Base(path), path: shortPath(path)}
-	branch, err := gitcmd.CurrentBranch(ctx, path)
-	if err != nil || branch == "" {
-		res.branch = "detached"
-		res.feature = true
-	} else {
-		res.branch = branch
-		if def := gitcmd.DefaultBranch(ctx, path); def != "" && def != branch {
-			res.feature = true
-		}
-	}
+	res.branch, res.feature = branchState(ctx, path)
+
 	dirty, err := gitcmd.IsDirty(ctx, path)
 	if err != nil {
 		res.err = err
@@ -173,4 +189,14 @@ func repoStatus(ctx context.Context, path string) statusResult {
 	}
 	res.dirty = dirty
 	return res
+}
+
+func branchState(ctx context.Context, path string) (string, bool) {
+	branch, err := gitcmd.CurrentBranch(ctx, path)
+	if err != nil || branch == "" {
+		return "detached", true
+	}
+
+	def := gitcmd.DefaultBranch(ctx, path)
+	return branch, def != "" && def != branch
 }
