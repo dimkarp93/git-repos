@@ -251,18 +251,7 @@ type localMatches struct {
 }
 
 func (s *session) findMatches(locals []*localFacts, remotes []*remoteFacts, opts options) []localMatches {
-	byHistory := make([][]evidence, len(locals))
-	needFiles := false
-	for i, local := range locals {
-		for _, remote := range remotes {
-			if ev := scoreMatch(local, remote); ev.byHistory() {
-				byHistory[i] = append(byHistory[i], ev)
-			}
-		}
-		if len(byHistory[i]) == 0 {
-			needFiles = true
-		}
-	}
+	byHistory, needFiles := historyMatches(locals, remotes)
 	if needFiles {
 		s.loadTrees(remotes, opts)
 	}
@@ -271,23 +260,47 @@ func (s *session) findMatches(locals []*localFacts, remotes []*remoteFacts, opts
 	for i, local := range locals {
 		found := byHistory[i]
 		if len(found) == 0 {
-			for _, remote := range remotes {
-				if ev := scoreMatch(local, remote); ev.matches(opts.minSimilarity) {
-					found = append(found, ev)
-				}
-			}
+			found = fileMatches(local, remotes, opts.minSimilarity)
 		}
-		if len(found) == 0 {
-			continue
+		if len(found) > 0 {
+			out = append(out, s.ranked(local, found))
 		}
-		for j := range found {
-			s.measureAhead(local, &found[j])
-		}
-		rankEvidence(found)
-		out = append(out, localMatches{local: local, found: found})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].local.item.Path < out[j].local.item.Path })
 	return out
+}
+
+func historyMatches(locals []*localFacts, remotes []*remoteFacts) ([][]evidence, bool) {
+	byHistory := make([][]evidence, len(locals))
+	needFiles := false
+	for i, local := range locals {
+		for _, remote := range remotes {
+			if ev := scoreMatch(local, remote); ev.byHistory() {
+				byHistory[i] = append(byHistory[i], ev)
+			}
+		}
+		needFiles = needFiles || len(byHistory[i]) == 0
+	}
+	return byHistory, needFiles
+}
+
+func fileMatches(local *localFacts, remotes []*remoteFacts, minSimilarity float64) []evidence {
+	var found []evidence
+	for _, remote := range remotes {
+		if ev := scoreMatch(local, remote); ev.matches(minSimilarity) {
+			found = append(found, ev)
+		}
+	}
+	return found
+}
+
+func (s *session) ranked(local *localFacts, found []evidence) localMatches {
+	for j := range found {
+		s.measureAhead(local, &found[j])
+	}
+
+	rankEvidence(found)
+	return localMatches{local: local, found: found}
 }
 
 func (s *session) loadTrees(remotes []*remoteFacts, opts options) {
@@ -314,6 +327,15 @@ func (s *session) measureAhead(local *localFacts, ev *evidence) {
 }
 
 func scoreMatch(local *localFacts, remote *remoteFacts) evidence {
+	ev := historyEvidence(local, remote)
+	if ev.byHistory() || len(remote.tree) == 0 || len(local.blobs) == 0 {
+		return ev
+	}
+
+	return withFileEvidence(ev, local, remote)
+}
+
+func historyEvidence(local *localFacts, remote *remoteFacts) evidence {
 	ev := evidence{
 		remote:      remote,
 		remoteAhead: -1,
@@ -322,6 +344,7 @@ func scoreMatch(local *localFacts, remote *remoteFacts) evidence {
 	if root := remote.history.Root; root.SHA != "" && (local.roots[root.SHA] || local.commits[root.SHA]) {
 		ev.sharedRoot = &root
 	}
+
 	for i, commit := range remote.history.Recent {
 		if !local.commits[commit.SHA] {
 			continue
@@ -331,22 +354,19 @@ func scoreMatch(local *localFacts, remote *remoteFacts) evidence {
 		}
 		ev.shared = append(ev.shared, commit)
 	}
-	if ev.byHistory() || len(remote.tree) == 0 || len(local.blobs) == 0 {
-		return ev
-	}
+	return ev
+}
 
+func withFileEvidence(ev evidence, local *localFacts, remote *remoteFacts) evidence {
 	localSHAs := map[string]bool{}
 	for _, sha := range local.blobs {
 		localSHAs[sha] = true
 	}
 	remoteSHAs := map[string]bool{}
-	var paths []string
 	for _, entry := range remote.tree {
 		remoteSHAs[entry.SHA] = true
-		if localSHAs[entry.SHA] && local.blobs[entry.Path] == entry.SHA {
-			paths = append(paths, entry.Path)
-		}
 	}
+
 	common := 0
 	for sha := range remoteSHAs {
 		if localSHAs[sha] {
@@ -357,17 +377,30 @@ func scoreMatch(local *localFacts, remote *remoteFacts) evidence {
 	if union == 0 || common == 0 {
 		return ev
 	}
+
+	paths := samePaths(local, remote, localSHAs)
+	ev.sameFiles = common
+	ev.totalFiles = union
+	ev.similarity = float64(common) / float64(union)
+	ev.samplePaths = paths[:min(len(paths), samePathsShown)]
+	return ev
+}
+
+func samePaths(local *localFacts, remote *remoteFacts, localSHAs map[string]bool) []string {
+	var paths []string
+	for _, entry := range remote.tree {
+		if localSHAs[entry.SHA] && local.blobs[entry.Path] == entry.SHA {
+			paths = append(paths, entry.Path)
+		}
+	}
+
 	sort.Slice(paths, func(i, j int) bool {
 		if di, dj := strings.Count(paths[i], "/"), strings.Count(paths[j], "/"); di != dj {
 			return di < dj
 		}
 		return paths[i] < paths[j]
 	})
-	ev.sameFiles = common
-	ev.totalFiles = union
-	ev.similarity = float64(common) / float64(union)
-	ev.samplePaths = paths[:min(len(paths), samePathsShown)]
-	return ev
+	return paths
 }
 
 func rankEvidence(found []evidence) {
