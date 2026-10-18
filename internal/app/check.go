@@ -135,6 +135,14 @@ type inventory struct {
 	remotes     []provider.Repo
 }
 
+type matcher struct {
+	ctx    context.Context
+	prov   provider.Provider
+	byName map[string]provider.Repo
+	seen   map[string]bool
+	inv    inventory
+}
+
 func collect(ctx context.Context, prov provider.Provider, store *cache.Cache, cfg config.Config, roots []string, opts options, pr *progress) ([]matched, inventory, error) {
 	inv := inventory{}
 	locals, err := scanLocal(cfg, opts, roots, pr, store)
