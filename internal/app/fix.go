@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 
 	"github.com/dimkarp93/git-repos/internal/gitcmd"
 	"github.com/dimkarp93/git-repos/internal/provider"
@@ -229,21 +228,6 @@ func (s *session) remoteFacts(items []RemoteOnly, opts options) []*remoteFacts {
 		}
 	}
 	return out
-}
-
-func parallel(jobs, n int, fn func(i int)) {
-	sem := make(chan struct{}, max(jobs, 1))
-	var wg sync.WaitGroup
-	for i := range n {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			fn(i)
-		}()
-	}
-	wg.Wait()
 }
 
 type localMatches struct {
