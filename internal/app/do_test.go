@@ -12,6 +12,7 @@ import (
 	"github.com/dimkarp93/git-repos/internal/cache"
 	"github.com/dimkarp93/git-repos/internal/config"
 	"github.com/dimkarp93/git-repos/internal/render"
+	"github.com/dimkarp93/utils/pkg/collections"
 )
 
 func doSession(t *testing.T, root string, out *strings.Builder) *session {
@@ -43,11 +44,7 @@ func TestSelectReposWithoutFilters(t *testing.T) {
 }
 
 func baseNames(paths []string) []string {
-	out := make([]string, 0, len(paths))
-	for _, path := range paths {
-		out = append(out, filepath.Base(path))
-	}
-	return out
+	return collections.Map(paths, filepath.Base)
 }
 
 func TestSelectReposByInDevelop(t *testing.T) {
