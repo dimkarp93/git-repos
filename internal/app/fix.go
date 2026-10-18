@@ -289,11 +289,7 @@ func (s *session) findMatches(locals []*localFacts, remotes []*remoteFacts, opts
 
 	var out []localMatches
 	for i, local := range locals {
-		found := byHistory[i]
-		if len(found) == 0 {
-			found = fileMatches(local, remotes, opts.minSimilarity)
-		}
-		if len(found) > 0 {
+		if found := orFileMatches(byHistory[i], local, remotes, opts.minSimilarity); len(found) > 0 {
 			out = append(out, s.ranked(local, found))
 		}
 	}
@@ -313,6 +309,14 @@ func historyMatches(locals []*localFacts, remotes []*remoteFacts) ([][]evidence,
 		needFiles = needFiles || len(byHistory[i]) == 0
 	}
 	return byHistory, needFiles
+}
+
+func orFileMatches(byHistory []evidence, local *localFacts, remotes []*remoteFacts, minSimilarity float64) []evidence {
+	if len(byHistory) > 0 {
+		return byHistory
+	}
+
+	return fileMatches(local, remotes, minSimilarity)
 }
 
 func fileMatches(local *localFacts, remotes []*remoteFacts, minSimilarity float64) []evidence {
@@ -435,22 +439,22 @@ func samePaths(local *localFacts, remote *remoteFacts, localSHAs map[string]bool
 }
 
 func rankEvidence(found []evidence) {
-	sort.SliceStable(found, func(i, j int) bool {
-		a, b := found[i], found[j]
-		if (a.sharedRoot != nil) != (b.sharedRoot != nil) {
-			return a.sharedRoot != nil
-		}
-		if len(a.shared) != len(b.shared) {
-			return len(a.shared) > len(b.shared)
-		}
-		if a.similarity != b.similarity {
-			return a.similarity > b.similarity
-		}
-		if a.sameName != b.sameName {
-			return a.sameName
-		}
+	sort.SliceStable(found, func(i, j int) bool { return evidenceLess(found[i], found[j]) })
+}
+
+func evidenceLess(a, b evidence) bool {
+	switch {
+	case (a.sharedRoot != nil) != (b.sharedRoot != nil):
+		return a.sharedRoot != nil
+	case len(a.shared) != len(b.shared):
+		return len(a.shared) > len(b.shared)
+	case a.similarity != b.similarity:
+		return a.similarity > b.similarity
+	case a.sameName != b.sameName:
+		return a.sameName
+	default:
 		return a.remote.item.FullName < b.remote.item.FullName
-	})
+	}
 }
 
 func autoPick(found []evidence) (int, bool) {
