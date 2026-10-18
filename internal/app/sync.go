@@ -11,6 +11,7 @@ import (
 	"github.com/dimkarp93/git-repos/internal/gitcmd"
 	"github.com/dimkarp93/git-repos/internal/provider"
 	"github.com/dimkarp93/git-repos/internal/render"
+	"github.com/dimkarp93/utils/pkg/collections"
 )
 
 type syncAction struct {
@@ -262,13 +263,7 @@ func (s *session) cloneOne(item RemoteOnly, into string, opts options) syncActio
 }
 
 func countOrphans(inv inventory) int {
-	n := 0
-	for _, item := range inv.localOnly {
-		if item.Orphan() {
-			n++
-		}
-	}
-	return n
+	return collections.CountFunc(inv.localOnly, LocalOnly.Orphan)
 }
 
 func nameTaken(inv inventory, account, name string) bool {
@@ -285,16 +280,17 @@ func report(s *session, title string, actions []syncAction) {
 		return
 	}
 
-	rows := make([][]render.Cell, 0, len(actions))
-	for _, action := range actions {
-		rows = append(rows, []render.Cell{
-			render.Plain(render.Ellipsis(action.Target, maxPathWidth)),
-			{Text: render.Ellipsis(action.Detail, maxDetailWidth), Color: render.Grey},
-			syncStatus(action),
-		})
-	}
+	rows := collections.Map(actions, syncRow)
 	s.printer.Table(title, []string{"SOURCE", "TARGET", "STATUS"}, rows)
 	s.printer.Line("", "")
+}
+
+func syncRow(action syncAction) []render.Cell {
+	return []render.Cell{
+		render.Plain(render.Ellipsis(action.Target, maxPathWidth)),
+		{Text: render.Ellipsis(action.Detail, maxDetailWidth), Color: render.Grey},
+		syncStatus(action),
+	}
 }
 
 func syncStatus(action syncAction) render.Cell {
@@ -311,23 +307,15 @@ func syncStatus(action syncAction) render.Cell {
 }
 
 func countDone(actions []syncAction) int {
-	n := 0
-	for _, action := range actions {
-		if action.Done {
-			n++
-		}
-	}
-	return n
+	return collections.CountFunc(actions, func(action syncAction) bool {
+		return action.Done
+	})
 }
 
 func countFailed(actions []syncAction) int {
-	n := 0
-	for _, action := range actions {
-		if action.Err != nil {
-			n++
-		}
-	}
-	return n
+	return collections.CountFunc(actions, func(action syncAction) bool {
+		return action.Err != nil
+	})
 }
 
 func upperName(s string) string {

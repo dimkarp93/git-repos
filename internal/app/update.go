@@ -7,6 +7,7 @@ import (
 
 	"github.com/dimkarp93/git-repos/internal/gitcmd"
 	"github.com/dimkarp93/git-repos/internal/render"
+	"github.com/dimkarp93/utils/pkg/collections"
 )
 
 type fetchResult struct {
@@ -55,26 +56,22 @@ func runUpdate(args []string) int {
 }
 
 func countFetchFailed(results []fetchResult) int {
-	failed := 0
-	for _, res := range results {
-		if res.Err != nil {
-			failed++
-		}
-	}
-	return failed
+	return collections.CountFunc(results, func(res fetchResult) bool {
+		return res.Err != nil
+	})
 }
 
 func fetchRows(results []fetchResult) [][]render.Cell {
-	rows := make([][]render.Cell, 0, len(results))
-	for _, res := range results {
-		rows = append(rows, []render.Cell{
-			{Text: res.FullName, Color: render.Bold},
-			render.Plain(res.Branch),
-			fetchStatus(res.Err),
-			{Text: render.Ellipsis(res.Path, maxPathWidth), Color: render.Grey},
-		})
+	return collections.Map(results, fetchRow)
+}
+
+func fetchRow(res fetchResult) []render.Cell {
+	return []render.Cell{
+		{Text: res.FullName, Color: render.Bold},
+		render.Plain(res.Branch),
+		fetchStatus(res.Err),
+		{Text: render.Ellipsis(res.Path, maxPathWidth), Color: render.Grey},
 	}
-	return rows
 }
 
 func fetchStatus(err error) render.Cell {

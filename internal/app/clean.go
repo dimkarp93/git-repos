@@ -8,6 +8,7 @@ import (
 
 	"github.com/dimkarp93/git-repos/internal/gitcmd"
 	"github.com/dimkarp93/git-repos/internal/render"
+	"github.com/dimkarp93/utils/pkg/collections"
 )
 
 func cleanLocalFlags(opts *options) *flag.FlagSet {
@@ -63,13 +64,7 @@ func (s *session) cleanOrphans(inv inventory, opts options) int {
 }
 
 func orphans(items []LocalOnly) []LocalOnly {
-	out := make([]LocalOnly, 0, len(items))
-	for _, item := range items {
-		if item.Orphan() {
-			out = append(out, item)
-		}
-	}
-	return out
+	return collections.Filter(items, LocalOnly.Orphan)
 }
 
 func printLocalCandidates(p *render.Printer, candidates []LocalOnly) {
