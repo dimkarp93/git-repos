@@ -3,7 +3,6 @@ package app
 import (
 	"bytes"
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,101 +37,127 @@ func renameInventory(locals []string, remotes []string) inventory {
 
 func TestValidateRepoName(t *testing.T) {
 	for _, name := range []string{"tool", "my-tool_2.0", "A"} {
-		assert.NoError(t, validateRepoName(name))
+		t.Run("valid "+name, func(t *testing.T) {
+			assert.NoError(t, validateRepoName(name))
+		})
 	}
 	for _, name := range []string{"", ".", "..", "a/b", "a b", "ы"} {
-		if err := validateRepoName(name); err == nil {
-			t.Errorf("validateRepoName(%q) accepted", name)
-		}
+		t.Run("invalid "+name, func(t *testing.T) {
+			assert.Error(t, validateRepoName(name))
+		})
 	}
 }
 
 func TestFindRenamePair(t *testing.T) {
 	inv := renameInventory([]string{"/w/a/tool", "/w/b/other"}, []string{"tool", "other"})
-	pair, err := findRenamePair(inv, "tool")
-	if err != nil || pair.local.Path != "/w/a/tool" || pair.remote.Name != "tool" {
-		t.Fatalf("pair = %+v, err = %v", pair, err)
-	}
 
+	pair, err := findRenamePair(inv, "tool")
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/w/a/tool", "tool"}, []string{pair.local.Path, pair.remote.Name})
+}
+
+func unlinkedInventory() inventory {
+	inv := renameInventory([]string{"/a/tool"}, []string{"tool"})
+	inv.pairs = nil
+	return inv
+}
+
+func linkedElsewhereInventory() inventory {
+	inv := renameInventory([]string{"/a/tool"}, []string{"tool"})
+	inv.pairs[0].remote = provider.Repo{Owner: "tester", Name: "moved"}
+	return inv
+}
+
+func TestFindRenamePairErrors(t *testing.T) {
 	cases := []struct {
 		name    string
 		inv     inventory
-		old     string
 		wantErr string
 	}{
-		{"no local", renameInventory(nil, []string{"tool"}), "tool", "no local repository"},
-		{"two locals", renameInventory([]string{"/a/tool", "/b/tool"}, []string{"tool"}), "tool", "2 local repositories"},
-		{"no remote", renameInventory([]string{"/a/tool"}, nil), "tool", "no remote repository"},
-		{"two remotes", renameInventory([]string{"/a/tool"}, []string{"tool", "Tool"}), "tool", "2 remote repositories"},
-		{"not linked", func() inventory {
-			inv := renameInventory([]string{"/a/tool"}, []string{"tool"})
-			inv.pairs = nil
-			return inv
-		}(), "tool", "not linked"},
-		{"linked elsewhere", func() inventory {
-			inv := renameInventory([]string{"/a/tool"}, []string{"tool"})
-			inv.pairs[0].remote = provider.Repo{Owner: "tester", Name: "moved"}
-			return inv
-		}(), "tool", "not linked"},
+		{"no local", renameInventory(nil, []string{"tool"}), "no local repository"},
+		{"two locals", renameInventory([]string{"/a/tool", "/b/tool"}, []string{"tool"}), "2 local repositories"},
+		{"no remote", renameInventory([]string{"/a/tool"}, nil), "no remote repository"},
+		{"two remotes", renameInventory([]string{"/a/tool"}, []string{"tool", "Tool"}), "2 remote repositories"},
+		{"not linked", unlinkedInventory(), "not linked"},
+		{"linked elsewhere", linkedElsewhereInventory(), "not linked"},
 	}
 	for _, tc := range cases {
-		_, err := findRenamePair(tc.inv, tc.old)
-		if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-			t.Errorf("%s: err = %v, want %q", tc.name, err, tc.wantErr)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := findRenamePair(tc.inv, "tool")
+			assert.ErrorContains(t, err, tc.wantErr)
+		})
 	}
 }
 
-func TestCheckNewName(t *testing.T) {
+func newNameInventory(t *testing.T) (inventory, matched) {
+	t.Helper()
+
 	dir := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(dir, "plain"), 0o755))
 	inv := renameInventory(
 		[]string{filepath.Join(dir, "tool"), filepath.Join(dir, "other")},
 		[]string{"tool", "other", "remote-only"},
 	)
-	pair := inv.pairs[0]
-	cases := []struct {
-		name    string
-		wantErr string
-	}{
-		{"fresh", ""},
-		{"tool", "local repository"},
-		{"OTHER", "local repository"},
-		{"remote-only", "remote repository"},
-		{"plain", "already exists"},
-		{"bad/name", "contains"},
-		{"", "empty"},
-	}
-	for _, tc := range cases {
-		err := checkNewName(inv, pair, tc.name)
-		switch {
-		case tc.wantErr == "" && err != nil:
-			t.Errorf("checkNewName(%q) = %v", tc.name, err)
-		case tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)):
-			t.Errorf("checkNewName(%q) = %v, want %q", tc.name, err, tc.wantErr)
-		}
-	}
+	return inv, inv.pairs[0]
 }
 
-func TestRenameCandidates(t *testing.T) {
+func TestCheckNewName(t *testing.T) {
+	inv, pair := newNameInventory(t)
+	cases := map[string]string{
+		"tool":        "local repository",
+		"OTHER":       "local repository",
+		"remote-only": "remote repository",
+		"plain":       "already exists",
+		"bad/name":    "contains",
+		"":            "empty",
+	}
+	for name, wantErr := range cases {
+		t.Run(name, func(t *testing.T) {
+			assert.ErrorContains(t, checkNewName(inv, pair, name), wantErr)
+		})
+	}
+	t.Run("fresh", func(t *testing.T) {
+		assert.NoError(t, checkNewName(inv, pair, "fresh"))
+	})
+}
+
+func candidateNames(candidates []renameCandidate) []string {
+	names := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		names = append(names, c.name)
+	}
+	return names
+}
+
+func manyCandidates() []renameCandidate {
 	var locals, remotes []string
-	for i := 0; i < 25; i++ {
+	for i := range 25 {
 		name := "repo" + string(rune('a'+i))
 		locals = append(locals, filepath.Join("/w", name))
 		remotes = append(remotes, name)
 	}
 	locals = append(locals, "/x/dup", "/y/dup", "/w/local-only")
 	remotes = append(remotes, "dup", "remote-only")
-	got := renameCandidates(context.Background(), renameInventory(locals, remotes))
-	require.Len(t, got, maxRenameCandidates, "candidates = %d, want %d", len(got), maxRenameCandidates)
-	for _, c := range got {
-		if strings.HasPrefix(c.name, "dup") || c.name == "local-only" || c.name == "remote-only" {
-			t.Fatalf("unexpected candidate %q", c.name)
-		}
+	return renameCandidates(context.Background(), renameInventory(locals, remotes))
+}
+
+func TestRenameCandidates(t *testing.T) {
+	got := candidateNames(manyCandidates())
+
+	t.Run("limited", func(t *testing.T) {
+		assert.Len(t, got, maxRenameCandidates)
+	})
+	for _, unwanted := range []string{"dup", "local-only", "remote-only"} {
+		t.Run("skips "+unwanted, func(t *testing.T) {
+			assert.NotContains(t, got, unwanted)
+		})
 	}
 }
 
-func TestRenameCandidatesSortedByActivity(t *testing.T) {
+func agedRepos(t *testing.T) ([]string, []string) {
+	t.Helper()
+
 	dir := t.TempDir()
 	var locals, remotes []string
 	for _, name := range []string{"old", "new"} {
@@ -142,71 +167,99 @@ func TestRenameCandidatesSortedByActivity(t *testing.T) {
 		locals = append(locals, path)
 		remotes = append(remotes, name)
 	}
+
 	past := mustTime(t, "2020-01-01T00:00:00Z")
-	for _, file := range []string{"HEAD", "index", "FETCH_HEAD", "logs/HEAD"} {
+	for _, file := range []string{"HEAD", "index", "FETCH_HEAD", "logs/HEAD", ""} {
 		os.Chtimes(filepath.Join(dir, "old", ".git", file), past, past)
 	}
-	os.Chtimes(filepath.Join(dir, "old", ".git"), past, past)
+	return locals, remotes
+}
+
+func TestRenameCandidatesSortedByActivity(t *testing.T) {
+	locals, remotes := agedRepos(t)
+
 	got := renameCandidates(context.Background(), renameInventory(locals, remotes))
-	if len(got) != 2 || got[0].name != "new" || got[1].name != "old" {
-		t.Fatalf("candidates = %+v", got)
-	}
+
+	assert.Equal(t, []string{"new", "old"}, candidateNames(got))
+}
+
+func renameFixture(t *testing.T, failOn map[string]error) (*session, *fakeProvider, matched, *bytes.Buffer) {
+	t.Helper()
+
+	dir := filepath.Join(t.TempDir(), "old")
+	require.NoError(t, os.Mkdir(dir, 0o755))
+	git(t, dir, "init", "-q")
+	git(t, dir, "remote", "add", "origin", "https://fake.test/tester/old.git")
+
+	remote := provider.Repo{Owner: "tester", Name: "old"}
+	fake := &fakeProvider{repos: []provider.Repo{remote}, base: "https://fake.test/tester", failOn: failOn}
+	var out bytes.Buffer
+	s := &session{ctx: context.Background(), prov: fake, printer: render.NewPrinter(&out, false)}
+	return s, fake, matched{local: scan.Repo{Path: dir}, remote: remote}, &out
+}
+
+func renamedFresh(t *testing.T) (*fakeProvider, matched, *bytes.Buffer) {
+	t.Helper()
+
+	s, fake, pair, out := renameFixture(t, nil)
+	require.NoError(t, s.executeRename(pair, "fresh"))
+
+	return fake, pair, out
 }
 
 func TestExecuteRename(t *testing.T) {
-	root := t.TempDir()
-	dir := filepath.Join(root, "old")
-	require.NoError(t, os.Mkdir(dir, 0o755))
-	git(t, dir, "init", "-q")
-	git(t, dir, "remote", "add", "origin", "https://fake.test/tester/old.git")
+	fake, pair, out := renamedFresh(t)
+	target := filepath.Join(filepath.Dir(pair.local.Path), "fresh")
 
-	remote := provider.Repo{Owner: "tester", Name: "old"}
-	fake := &fakeProvider{repos: []provider.Repo{remote}, base: "https://fake.test/tester"}
-	var out bytes.Buffer
-	s := &session{ctx: context.Background(), prov: fake, printer: render.NewPrinter(&out, false)}
-	pair := matched{local: scan.Repo{Path: dir}, remote: remote}
-
-	require.NoError(t, s.executeRename(pair, "fresh"))
-	if len(fake.renamed) != 1 || fake.renamed[0] != "tester/old->fresh" {
-		t.Fatalf("renamed = %v", fake.renamed)
-	}
-	target := filepath.Join(root, "fresh")
-	if _, err := os.Stat(target); err != nil {
-		t.Fatalf("directory was not renamed: %v", err)
-	}
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
-		t.Fatalf("old directory still exists: %v", err)
-	}
-	if url := git(t, target, "config", "--get", "remote.origin.url"); !strings.HasSuffix(url, "/fresh.git") {
-		t.Fatalf("origin = %q", url)
-	}
-	require.Contains(t, out.String(), "Renamed old → fresh", "output = %q", out.String())
+	t.Run("remote renamed", func(t *testing.T) {
+		assert.Equal(t, []string{"tester/old->fresh"}, fake.renamed)
+	})
+	t.Run("directory renamed", func(t *testing.T) {
+		assert.DirExists(t, target)
+	})
+	t.Run("old directory gone", func(t *testing.T) {
+		assert.NoDirExists(t, pair.local.Path)
+	})
+	t.Run("origin updated", func(t *testing.T) {
+		assert.True(t, strings.HasSuffix(git(t, target, "config", "--get", "remote.origin.url"), "/fresh.git"))
+	})
+	t.Run("reported", func(t *testing.T) {
+		assert.Contains(t, out.String(), "Renamed old → fresh")
+	})
 }
 
 func TestExecuteRenameRemoteFailureKeepsLocal(t *testing.T) {
-	root := t.TempDir()
-	dir := filepath.Join(root, "old")
-	require.NoError(t, os.Mkdir(dir, 0o755))
-	git(t, dir, "init", "-q")
-	git(t, dir, "remote", "add", "origin", "https://fake.test/tester/old.git")
+	s, _, pair, _ := renameFixture(t, map[string]error{"rename:tester/old": provider.ErrForbidden})
 
-	remote := provider.Repo{Owner: "tester", Name: "old"}
-	fake := &fakeProvider{repos: []provider.Repo{remote}, failOn: map[string]error{"rename:tester/old": provider.ErrForbidden}}
-	s := &session{ctx: context.Background(), prov: fake, printer: render.NewPrinter(&bytes.Buffer{}, false)}
-	err := s.executeRename(matched{local: scan.Repo{Path: dir}, remote: remote}, "fresh")
-	require.True(t, errors.Is(err, provider.ErrForbidden))
-	if _, err := os.Stat(dir); err != nil {
-		t.Fatalf("local directory must stay: %v", err)
-	}
+	err := s.executeRename(pair, "fresh")
+
+	t.Run("error", func(t *testing.T) {
+		assert.ErrorIs(t, err, provider.ErrForbidden)
+	})
+	t.Run("local kept", func(t *testing.T) {
+		assert.DirExists(t, pair.local.Path)
+	})
 }
 
 func TestProtocolOf(t *testing.T) {
-	if protocolOf("https://github.com/o/n.git") != provider.ProtocolHTTPS {
-		t.Error("https url")
+	cases := map[string]string{
+		"https://github.com/o/n.git": provider.ProtocolHTTPS,
+		"git@github.com:o/n.git":     provider.ProtocolSSH,
 	}
-	if protocolOf("git@github.com:o/n.git") != provider.ProtocolSSH {
-		t.Error("ssh url")
+	for url, want := range cases {
+		t.Run(url, func(t *testing.T) {
+			assert.Equal(t, want, protocolOf(url))
+		})
 	}
+}
+
+func TestRemoteProtocol(t *testing.T) {
+	t.Run("from url", func(t *testing.T) {
+		assert.Equal(t, provider.ProtocolHTTPS, remoteProtocol("https://x/o/n.git", provider.ProtocolSSH))
+	})
+	t.Run("fallback", func(t *testing.T) {
+		assert.Equal(t, provider.ProtocolSSH, remoteProtocol("", provider.ProtocolSSH))
+	})
 }
 
 func mustTime(t *testing.T, value string) time.Time {
