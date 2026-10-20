@@ -117,15 +117,17 @@ overlap, so `do` accepts all of them at once.
 | `--pushable` | status, do | a feature branch with a clean working tree |
 | `--branch <substring>` | diff, status | the branch (default branch in diff, current branch in status) contains this substring, case-insensitive |
 | `--project <substring>` | diff, status | the repository name (without the owner) contains this substring, case-insensitive |
+| `--repo <substring>` | diff, status | same as `--project` |
+| `--worktree <substring>` | status | the workspace name (the `WORKSPACE` column) contains this substring, case-insensitive |
 
 Several filters at once are **OR** — the union of the selections. A table with no filter of its own is not printed: `diff --behind` shows only the branch table. The
 summary line gets `· filter: --behind, --wip` appended and counts the displayed rows. The exit code of
 `diff` is still computed from the **full** report: it answers "are there differences at all", not
 "in this selection".
 
-`--branch` and `--project` work differently: they are not a status category but an extra **AND**
+`--branch`, `--project` (`--repo`) and `--worktree` work differently: they are not a status category but an extra **AND**
 condition on top of the other filters — `diff --behind --project foo` shows only lagging
-repositories whose name contains `foo`. They are only available on `diff` and `status` (not `do`).
+repositories whose name contains `foo`. They are only available on `diff` and `status` (`--worktree` only on `status`, none of them on `do`).
 
 ### do
 
