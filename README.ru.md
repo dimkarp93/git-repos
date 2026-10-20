@@ -97,6 +97,12 @@ main workspace. В колонке `MARKS` перечислены **все** ме
 (26407 of 27471 directories)`, затем `phase 2/2 · repository status · ~/tools/md-docx · 45% (15 of 33)`.
 Снимается флагом `--no-progress`.
 
+`--group repo|branch|worktree` вместо таблицы печатает только группы: одну колонку (`REPOSITORY`, `BRANCH` или
+`WORKSPACE`) и `COUNT` — сколько строк полной таблицы попало в группу. Сначала применяются фильтры, поэтому
+выводятся только группы, в которые попали подходящие строки; без фильтров — все группы. Сортировка — по алфавиту.
+`repo` группирует по репозиторию (два репозитория с одним именем в разных каталогах — две группы); у строки с
+ошибкой нет ни ветки, ни workspace, она попадает в группу `-`. Итоговая строка не печатается.
+
 Коды возврата: `0` — успех, `2` — часть репозиториев прочитать не удалось.
 
 ### Фильтры
@@ -369,6 +375,7 @@ git-repos sync -C ~/tools --into ~/tools --dry-run
 git-repos clean-local -C ~/tools
 git-repos clean-remote --yes
 git-repos status -C ~/tools --wip
+git-repos status -C ~/tools --feature --group branch
 git-repos diff -C ~/tools --behind --conflict
 git-repos do -C ~/tools --in-develop -- git status -s
 git-repos do -C ~/tools -- 'git log --oneline -1 | cat'

@@ -88,6 +88,12 @@ Uncommitted changes count only in the main workspace. A real workspace always re
 When `git multi ls` fails for a repository (no `origin`, no `refs/remotes/origin/HEAD`), the repository
 gets one row with the error, counts in `errors` and the exit code becomes `2`.
 
+`--group repo|branch|worktree` prints only the groups instead of the table: one column (`REPOSITORY`, `BRANCH`
+or `WORKSPACE`) and `COUNT` — how many rows of the full table fall into the group. The filters apply first, so
+only the groups with matching rows are shown; without filters — every group. Groups are sorted alphabetically.
+`repo` groups by repository (two repositories with the same name in different directories are two groups); a row
+with an error has no branch and no workspace and falls into the `-` group. The summary line is not printed.
+
 Exit codes: `0` — success, `2` — some repositories could not be read.
 
 ### Filters
@@ -365,6 +371,7 @@ git-repos sync -C ~/tools --into ~/tools --dry-run
 git-repos clean-local -C ~/tools
 git-repos clean-remote --yes
 git-repos status -C ~/tools --wip
+git-repos status -C ~/tools --feature --group branch
 git-repos diff -C ~/tools --behind --conflict
 git-repos do -C ~/tools --in-develop -- git status -s
 git-repos do -C ~/tools -- 'git log --oneline -1 | cat'
