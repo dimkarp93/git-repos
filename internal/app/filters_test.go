@@ -36,6 +36,7 @@ func TestFiltersMatchStatus(t *testing.T) {
 	dirty := statusResult{dirty: true}
 	both := statusResult{feature: true, dirty: true}
 	clean := statusResult{}
+	real := statusResult{feature: true, real: true}
 
 	cases := []struct {
 		name string
@@ -61,6 +62,11 @@ func TestFiltersMatchStatus(t *testing.T) {
 		{"pushable не ловит чистую дефолтную", filters{pushable: true}, clean, false},
 		{"hotfix или pushable", filters{hotfix: true, pushable: true}, feature, true},
 		{"view-фильтр не пропускает статусы", filters{behind: true}, both, false},
+		{"workspace — feature", filters{feature: true}, real, true},
+		{"workspace — wip", filters{wip: true}, real, true},
+		{"workspace не pushable", filters{pushable: true}, real, false},
+		{"workspace не in-develop", filters{inDevelop: true}, real, false},
+		{"workspace не hotfix", filters{hotfix: true}, real, false},
 	}
 	for _, tc := range cases {
 		assert.Equal(t, tc.want, tc.f.matchStatus(tc.res))

@@ -5,21 +5,26 @@ import (
 	"flag"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 
 	"github.com/dimkarp93/git-repos/internal/gitcmd"
+	"github.com/dimkarp93/git-repos/internal/multi"
 	"github.com/dimkarp93/git-repos/internal/render"
 	"github.com/dimkarp93/git-repos/internal/scan"
 )
 
 type statusResult struct {
-	dir     string
-	name    string
-	path    string
-	branch  string
-	feature bool
-	dirty   bool
-	err     error
+	dir       string
+	repo      string
+	name      string
+	path      string
+	workspace string
+	branch    string
+	feature   bool
+	dirty     bool
+	real      bool
+	err       error
 }
 
 type statusMark struct {
@@ -34,7 +39,7 @@ func statusMarks() []statusMark {
 		{"feature", render.Magenta, func(r statusResult) bool { return r.feature }, func(f filters) bool { return f.feature }},
 		{"in-develop", render.Yellow, func(r statusResult) bool { return r.dirty }, func(f filters) bool { return f.inDevelop }},
 		{"hotfix", render.Red, func(r statusResult) bool { return !r.feature && r.dirty }, func(f filters) bool { return f.hotfix }},
-		{"pushable", render.Green, func(r statusResult) bool { return r.feature && !r.dirty }, func(f filters) bool { return f.pushable }},
+		{"pushable", render.Green, func(r statusResult) bool { return r.feature && !r.dirty && !r.real }, func(f filters) bool { return f.pushable }},
 		{"wip", render.Blue, func(r statusResult) bool { return r.feature || r.dirty }, func(f filters) bool { return f.wip }},
 	}
 }
@@ -59,7 +64,7 @@ func statusFlags(opts *options) *flag.FlagSet {
 }
 
 type statusSummary struct {
-	shown, features, dirty, failed int
+	shown, repos, workspaces, features, dirty, failed int
 }
 
 func runStatus(args []string) int {
@@ -81,7 +86,7 @@ func runStatus(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	results := statusAll(s.ctx, locals, opts, s.pr)
+	results := statusAll(s.ctx, s.multi, locals, opts, s.pr)
 	s.spinner.Stop()
 
 	rows, sum := statusRows(results, opts.filters)
@@ -94,7 +99,7 @@ func runStatus(args []string) int {
 		return ExitOK
 	}
 
-	s.printer.Table("Local repository status", []string{"REPOSITORY", "BRANCH", "MARKS", "PATH"}, rows)
+	s.printer.Table("Local repository status", []string{"REPOSITORY", "WORKSPACE", "BRANCH", "MARKS", "PATH"}, rows)
 	s.printer.Line("", "%s", sum.line(s.printer, opts.filters))
 	if sum.failed > 0 {
 		return ExitFailure
@@ -116,6 +121,11 @@ func statusRows(results []statusResult, f filters) ([][]render.Cell, statusSumma
 
 func (s *statusSummary) add(res statusResult) {
 	s.shown++
+	if res.real {
+		s.workspaces++
+	} else {
+		s.repos++
+	}
 	if res.err != nil {
 		s.failed++
 		return
@@ -133,6 +143,7 @@ func statusRow(res statusResult) []render.Cell {
 	branch, marks := statusCells(res)
 	return []render.Cell{
 		{Text: res.name, Color: render.Bold},
+		render.Plain(res.workspace),
 		branch,
 		marks,
 		{Text: render.Ellipsis(res.path, maxPathWidth), Color: render.Grey},
@@ -151,8 +162,9 @@ func statusCells(res statusResult) (render.Cell, render.Cell) {
 }
 
 func (s statusSummary) line(p *render.Printer, f filters) string {
-	line := fmt.Sprintf("Summary: repositories — %d · %s · %s · errors — %d",
-		s.shown,
+	line := fmt.Sprintf("Summary: repositories — %d · workspaces — %d · %s · %s · errors — %d",
+		s.repos,
+		s.workspaces,
 		p.Colored(render.Magenta, fmt.Sprintf("not on the default branch — %d", s.features)),
 		p.Colored(render.Yellow, fmt.Sprintf("with changes — %d", s.dirty)),
 		s.failed,
@@ -163,32 +175,104 @@ func (s statusSummary) line(p *render.Printer, f filters) string {
 	return line
 }
 
-func statusAll(ctx context.Context, locals []scan.Repo, opts options, pr *progress) []statusResult {
-	results := make([]statusResult, len(locals))
+func statusAll(ctx context.Context, list multi.Lister, locals []scan.Repo, opts options, pr *progress) []statusResult {
+	groups := make([][]statusResult, len(locals))
 	pr.setPhase("repository status")
 	pr.setTotal(len(locals))
 
 	parallel(opts.jobs, len(locals), func(i int) {
 		pr.begin(shortPath(locals[i].Path))
 		defer pr.end()
-		results[i] = repoStatus(ctx, locals[i].Path)
+		groups[i] = repoStatus(ctx, list, locals[i].Path)
 	})
 
-	sort.Slice(results, func(i, j int) bool { return results[i].path < results[j].path })
+	results := uniqueRepos(groups)
+	sort.SliceStable(results, func(i, j int) bool { return statusLess(results[i], results[j]) })
 	return results
 }
 
-func repoStatus(ctx context.Context, path string) statusResult {
-	res := statusResult{dir: path, name: filepath.Base(path), path: shortPath(path)}
-	res.branch, res.feature = branchState(ctx, path)
+func uniqueRepos(groups [][]statusResult) []statusResult {
+	seen := map[string]bool{}
+	var out []statusResult
+	for _, group := range groups {
+		if len(group) == 0 || seen[group[0].repo] {
+			continue
+		}
+		seen[group[0].repo] = true
+		out = append(out, group...)
+	}
+	return out
+}
 
-	dirty, err := gitcmd.IsDirty(ctx, path)
+func statusLess(a, b statusResult) bool {
+	if a.repo != b.repo {
+		return a.repo < b.repo
+	}
+	if a.real != b.real {
+		return !a.real
+	}
+	return a.workspace < b.workspace
+}
+
+func repoStatus(ctx context.Context, list multi.Lister, path string) []statusResult {
+	workspaces, err := list(ctx, path)
+	if err != nil {
+		return []statusResult{failedStatus(path, err)}
+	}
+
+	idx := slices.IndexFunc(workspaces, func(ws multi.Workspace) bool { return ws.Kind == multi.Main })
+	if idx < 0 {
+		return []statusResult{failedStatus(path, fmt.Errorf("%s ls: no main workspace", multi.Binary))}
+	}
+
+	main := mainStatus(ctx, workspaces[idx])
+	out := []statusResult{main}
+	for _, ws := range workspaces {
+		if ws.Kind == multi.Real && !ws.Missing {
+			out = append(out, realStatus(main, ws))
+		}
+	}
+	return out
+}
+
+func failedStatus(path string, err error) statusResult {
+	return statusResult{dir: path, repo: path, name: filepath.Base(path), path: shortPath(path), err: err}
+}
+
+func mainStatus(ctx context.Context, ws multi.Workspace) statusResult {
+	res := statusResult{
+		dir:       ws.Path,
+		repo:      ws.Path,
+		name:      filepath.Base(ws.Path),
+		path:      shortPath(ws.Path),
+		workspace: ws.Name,
+	}
+	res.branch, res.feature = branchState(ctx, ws.Path)
+
+	dirty, err := gitcmd.IsDirty(ctx, ws.Path)
 	if err != nil {
 		res.err = err
 		return res
 	}
 	res.dirty = dirty
 	return res
+}
+
+func realStatus(main statusResult, ws multi.Workspace) statusResult {
+	branch := ws.Branch
+	if branch == "" {
+		branch = "detached"
+	}
+	return statusResult{
+		dir:       ws.Path,
+		repo:      main.repo,
+		name:      main.name,
+		path:      shortPath(ws.Path),
+		workspace: ws.Name,
+		branch:    branch,
+		feature:   true,
+		real:      true,
+	}
 }
 
 func branchState(ctx context.Context, path string) (string, bool) {

@@ -27,6 +27,7 @@ func doSession(t *testing.T, root string, out *strings.Builder) *session {
 		printer: render.NewPrinter(out, false),
 		pr:      &progress{},
 		spinner: render.NewSpinner(out, false),
+		multi:   fakeMulti(nil),
 	}
 }
 
