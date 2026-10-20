@@ -66,7 +66,11 @@ The `LAST FETCH` column is highlighted: ≥ 3 days — yellow, ≥ 10 — orange
 ### status
 
 Walks the local repositories (no provider and no token needed) and prints the branch of each one,
-followed by a `MARKS` column. It lists **every** mark that applies to the repository, each in its own
+followed by a `MARKS` column. Every repository is expanded through `git multi ls --main --real --json`:
+the first row is the main workspace, then one row per real workspace of [git-multi](https://github.com/dimkarp93/git-multi),
+with the workspace name in the `WORKSPACE` column. Virtual workspaces (`_ide`, `_test`, `_default`) and real ones
+whose directory is gone are not shown. A repository found through one of its linked worktrees is listed once, from
+its main workspace. The `MARKS` column lists **every** mark that applies to the repository, each in its own
 color, and each one matches the filter of the same name:
 
 - `[feature]` in magenta, with the branch name in blue — HEAD is not on the default branch (the default comes from `refs/remotes/origin/HEAD`,
@@ -77,6 +81,12 @@ color, and each one matches the filter of the same name:
 - `[wip]` in blue — at least one of the two: a feature branch **or** changes.
 
 The marks do not exclude each other, so a row usually reads `[feature] [pushable] [wip]`.
+
+Uncommitted changes count only in the main workspace. A real workspace always reads `[feature] [wip]`:
+`[in-develop]`, `[hotfix]` and `[pushable]` are never set on it (see `git multi ls` for its state).
+
+When `git multi ls` fails for a repository (no `origin`, no `refs/remotes/origin/HEAD`), the repository
+gets one row with the error, counts in `errors` and the exit code becomes `2`.
 
 Exit codes: `0` — success, `2` — some repositories could not be read.
 
@@ -119,6 +129,8 @@ git-repos do [filters] [-C dir] [--dry-run] -- <command> [args...]
 
 Selects repositories with the same filters and runs the command inside each of them, one at a time:
 
+- the command runs only in the main workspace (as `git-multi` defines it), once per repository; the status
+  filters are checked against the main workspace row only, real workspaces never select a repository;
 - the command runs as `sh -c` with the repository as the working directory; `stdin`, `stdout` and
   `stderr` are inherited directly, so the pager, colors and interactive input (password, editor) work;
 - a single argument goes to the shell as is — pipes, globs and `&&` work
@@ -312,6 +324,9 @@ Git 2.31 or newer is required: the `prunable` field appears in `git worktree lis
 version. With an older git these commands stop with an error.
 
 ## Installation
+
+[git-multi](https://github.com/dimkarp93/git-multi) must be in `PATH`: every command except help (`-h`,
+`help`, no command) checks for it and stops with exit code `2` when it is missing.
 
 ```sh
 just build      # ./git-repos in the repository root
