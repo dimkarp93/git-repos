@@ -32,6 +32,7 @@ func exactCompletions() []completeCase {
 		{name: "double dash", words: []string{"diff", "--f"}, want: []string{"--failed", "--fetch"}},
 		{name: "protocol", words: []string{"sync", "-protocol", ""}, want: []string{"ssh", "https"}},
 		{name: "protocol prefix", words: []string{"sync", "--protocol", "s"}, want: []string{"ssh"}},
+		{name: "group", words: []string{"status", "--group", "w"}, want: []string{"worktree"}},
 		{name: "provider", words: []string{"diff", "-provider", ""}, want: []string{"github"}},
 		{name: "roots", words: []string{"status", "-C", ""}, want: []string{directiveDirs}},
 		{name: "into", words: []string{"sync", "-into", ""}, want: []string{directiveDirs}},

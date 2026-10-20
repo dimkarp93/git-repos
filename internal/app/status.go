@@ -60,6 +60,7 @@ func statusFlags(opts *options) *flag.FlagSet {
 	fs.BoolVar(&opts.noProgress, "no-progress", false, "do not show the progress indicator")
 	opts.filters.registerStatus(fs)
 	opts.filters.registerName(fs)
+	fs.StringVar(&opts.group, "group", "", "print only the groups with row counts: repo, branch or worktree")
 	return fs
 }
 
@@ -72,6 +73,13 @@ func runStatus(args []string) int {
 	fs := statusFlags(&opts)
 	if ok, code := parseFlags(fs, args); !ok {
 		return code
+	}
+	var group statusGroup
+	if opts.group != "" {
+		var err error
+		if group, err = lookupStatusGroup(opts.group); err != nil {
+			return fail(err)
+		}
 	}
 
 	s, err := startLocal(opts)
@@ -99,8 +107,12 @@ func runStatus(args []string) int {
 		return ExitOK
 	}
 
-	s.printer.Table("Local repository status", []string{"REPOSITORY", "WORKSPACE", "BRANCH", "MARKS", "PATH"}, rows)
-	s.printer.Line("", "%s", sum.line(s.printer, opts.filters))
+	if opts.group != "" {
+		s.printer.Table("Local repository status by "+group.name, []string{group.header, "COUNT"}, groupRows(countGroups(results, opts.filters, group)))
+	} else {
+		s.printer.Table("Local repository status", []string{"REPOSITORY", "WORKSPACE", "BRANCH", "MARKS", "PATH"}, rows)
+		s.printer.Line("", "%s", sum.line(s.printer, opts.filters))
+	}
 	if sum.failed > 0 {
 		return ExitFailure
 	}

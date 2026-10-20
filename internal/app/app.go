@@ -48,6 +48,7 @@ type options struct {
 	noProgress    bool
 	forceColor    bool
 	asJSON        bool
+	group         string
 	filters       filters
 	timeout       time.Duration
 }
