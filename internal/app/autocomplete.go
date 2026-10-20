@@ -184,6 +184,8 @@ func flagValues(name, prefix string) []string {
 		return withPrefix([]string{"github"}, prefix)
 	case "protocol":
 		return withPrefix([]string{"ssh", "https"}, prefix)
+	case "group":
+		return withPrefix(statusGroupNames(), prefix)
 	case "C", "into":
 		return []string{directiveDirs}
 	case "timeout":

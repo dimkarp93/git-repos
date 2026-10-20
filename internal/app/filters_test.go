@@ -36,6 +36,7 @@ func TestFiltersMatchStatus(t *testing.T) {
 	dirty := statusResult{dirty: true}
 	both := statusResult{feature: true, dirty: true}
 	clean := statusResult{}
+	real := statusResult{feature: true, real: true}
 
 	cases := []struct {
 		name string
@@ -61,6 +62,11 @@ func TestFiltersMatchStatus(t *testing.T) {
 		{"pushable не ловит чистую дефолтную", filters{pushable: true}, clean, false},
 		{"hotfix или pushable", filters{hotfix: true, pushable: true}, feature, true},
 		{"view-фильтр не пропускает статусы", filters{behind: true}, both, false},
+		{"workspace — feature", filters{feature: true}, real, true},
+		{"workspace — wip", filters{wip: true}, real, true},
+		{"workspace не pushable", filters{pushable: true}, real, false},
+		{"workspace не in-develop", filters{inDevelop: true}, real, false},
+		{"workspace не hotfix", filters{hotfix: true}, real, false},
 	}
 	for _, tc := range cases {
 		assert.Equal(t, tc.want, tc.f.matchStatus(tc.res))
@@ -90,7 +96,7 @@ func TestFiltersMatchName(t *testing.T) {
 }
 
 func TestFiltersMatchNameStatus(t *testing.T) {
-	res := statusResult{name: "git-repos", branch: "feature/x"}
+	res := statusResult{name: "git-repos", branch: "feature/x", workspace: "Feat-Login", feature: true, real: true}
 	cases := []struct {
 		name string
 		f    filters
@@ -100,6 +106,12 @@ func TestFiltersMatchNameStatus(t *testing.T) {
 		{"project не совпадает", filters{project: "other"}, false},
 		{"branch совпадает по подстроке", filters{branch: "feature"}, true},
 		{"branch не совпадает", filters{branch: "main"}, false},
+		{"branch без учёта регистра", filters{branch: "FEATURE"}, true},
+		{"worktree совпадает по подстроке", filters{worktree: "login"}, true},
+		{"worktree не совпадает", filters{worktree: "main"}, false},
+		{"worktree и статус — И", filters{worktree: "feat", feature: true}, true},
+		{"worktree и статус — статус не совпал", filters{worktree: "feat", pushable: true}, false},
+		{"project, branch и worktree вместе", filters{project: "REPOS", branch: "x", worktree: "feat"}, true},
 	}
 	for _, tc := range cases {
 		assert.Equal(t, tc.want, tc.f.matchStatus(res))

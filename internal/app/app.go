@@ -14,6 +14,7 @@ import (
 
 	"github.com/dimkarp93/git-repos/internal/cache"
 	"github.com/dimkarp93/git-repos/internal/config"
+	"github.com/dimkarp93/git-repos/internal/multi"
 	"github.com/dimkarp93/git-repos/internal/provider"
 	"github.com/dimkarp93/git-repos/internal/provider/github"
 	"github.com/dimkarp93/git-repos/internal/render"
@@ -47,6 +48,7 @@ type options struct {
 	noProgress    bool
 	forceColor    bool
 	asJSON        bool
+	group         string
 	filters       filters
 	timeout       time.Duration
 }
@@ -108,11 +110,28 @@ func Run(args []string) int {
 	}
 
 	if cmd, ok := lookupCommand(name); ok {
+		if !cmd.hidden && !helpRequested(args[1:]) {
+			if err := multi.Check(); err != nil {
+				return fail(err)
+			}
+		}
 		return cmd.run(args[1:])
 	}
 	fmt.Fprintf(os.Stderr, "git-repos: unknown command %q\n\n", name)
 	usage(os.Stderr)
 	return ExitFailure
+}
+
+func helpRequested(args []string) bool {
+	for _, arg := range args {
+		switch arg {
+		case "--":
+			return false
+		case "-h", "-help", "--help":
+			return true
+		}
+	}
+	return false
 }
 
 func usage(w io.Writer) {
@@ -233,6 +252,7 @@ type session struct {
 	pr      *progress
 	spinner *render.Spinner
 	guard   *guard
+	multi   multi.Lister
 }
 
 func (s *session) close() {
@@ -286,6 +306,7 @@ func startLocal(opts options) (*session, error) {
 		printer: newPrinter(opts),
 		pr:      &progress{color: render.ColorEnabled(opts.forceColor, opts.noColor, os.Stderr)},
 		spinner: render.NewSpinner(os.Stderr, !opts.noProgress && render.IsTerminal(os.Stderr)),
+		multi:   multi.List,
 	}, nil
 }
 

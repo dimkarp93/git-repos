@@ -161,10 +161,7 @@ func shellQuote(arg string) string {
 
 func doPhases(f filters) int {
 	if !f.anyView() {
-		if f.anyStatus() {
-			return 2
-		}
-		return 1
+		return 2
 	}
 	if f.anyStatus() {
 		return 5
@@ -192,8 +189,10 @@ func isSetDir(dir string) bool {
 }
 
 func statusDirs(s *session, locals []scan.Repo, opts options) []string {
-	results := statusAll(s.ctx, locals, opts, s.pr)
-	matching := collections.Filter(results, opts.filters.matchStatus)
+	results := statusAll(s.ctx, s.multi, locals, opts, s.pr)
+	matching := collections.Filter(results, func(res statusResult) bool {
+		return !res.real && opts.filters.matchStatus(res)
+	})
 	return collections.Map(matching, statusResultDir)
 }
 
@@ -203,10 +202,7 @@ func localDirs(s *session, opts options) ([]string, error) {
 		return nil, err
 	}
 
-	if opts.filters.anyStatus() {
-		return statusDirs(s, locals, opts), nil
-	}
-	return collections.Map(locals, repoPath), nil
+	return statusDirs(s, locals, opts), nil
 }
 
 func providerDirs(s *session, opts options) ([]string, error) {

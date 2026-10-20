@@ -20,12 +20,14 @@ type filters struct {
 	pushable  bool
 	branch    string
 	project   string
+	worktree  string
 }
 
 var filterFlags = map[string]bool{
 	"local": true, "remote": true, "behind": true, "ahead": true, "synced": true,
 	"conflict": true, "failed": true, "feature": true, "in-develop": true, "wip": true,
 	"hotfix": true, "pushable": true, "branch": true, "project": true,
+	"repo": true, "worktree": true,
 }
 
 func isFilterFlag(name string) bool { return filterFlags[name] }
@@ -51,6 +53,11 @@ func (f *filters) registerStatus(fs *flag.FlagSet) {
 func (f *filters) registerName(fs *flag.FlagSet) {
 	fs.StringVar(&f.branch, "branch", "", "keep repositories whose branch contains this substring (case-insensitive)")
 	fs.StringVar(&f.project, "project", "", "keep repositories whose name contains this substring (case-insensitive)")
+	fs.StringVar(&f.project, "repo", "", "same as --project")
+}
+
+func (f *filters) registerWorktree(fs *flag.FlagSet) {
+	fs.StringVar(&f.worktree, "worktree", "", "keep rows whose workspace contains this substring (case-insensitive)")
 }
 
 func (f *filters) registerAll(fs *flag.FlagSet) {
@@ -66,18 +73,19 @@ func (f filters) anyStatus() bool {
 	return f.feature || f.inDevelop || f.wip || f.hotfix || f.pushable
 }
 
-func (f filters) anyName() bool { return f.branch != "" || f.project != "" }
+func (f filters) anyName() bool { return f.branch != "" || f.project != "" || f.worktree != "" }
 
 func (f filters) any() bool { return f.anyView() || f.anyStatus() || f.anyName() }
 
 func (f filters) matchName(name, branch string) bool {
-	if f.project != "" && !strings.Contains(strings.ToLower(name), strings.ToLower(f.project)) {
+	if !containsFold(name, f.project) {
 		return false
 	}
-	if f.branch != "" && !strings.Contains(strings.ToLower(branch), strings.ToLower(f.branch)) {
-		return false
-	}
-	return true
+	return containsFold(branch, f.branch)
+}
+
+func containsFold(s, sub string) bool {
+	return sub == "" || strings.Contains(strings.ToLower(s), strings.ToLower(sub))
 }
 
 func repoName(fullName string) string {
@@ -116,6 +124,9 @@ func (f filters) names() string {
 	}
 	if f.branch != "" {
 		out = append(out, "--branch="+f.branch)
+	}
+	if f.worktree != "" {
+		out = append(out, "--worktree="+f.worktree)
 	}
 	return strings.Join(out, ", ")
 }
@@ -158,7 +169,7 @@ func (f filters) matchResult(res Result) bool {
 }
 
 func (f filters) matchStatus(res statusResult) bool {
-	if !f.matchName(res.name, res.branch) {
+	if !f.matchName(res.name, res.branch) || !containsFold(res.workspace, f.worktree) {
 		return false
 	}
 	if !f.anyStatus() && !f.anyView() {
