@@ -60,6 +60,7 @@ func statusFlags(opts *options) *flag.FlagSet {
 	fs.BoolVar(&opts.noProgress, "no-progress", false, "do not show the progress indicator")
 	opts.filters.registerStatus(fs)
 	opts.filters.registerName(fs)
+	opts.filters.registerWorktree(fs)
 	fs.StringVar(&opts.group, "group", "", "print only the groups with row counts: repo, branch or worktree")
 	return fs
 }

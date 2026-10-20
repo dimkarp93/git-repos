@@ -96,7 +96,7 @@ func TestFiltersMatchName(t *testing.T) {
 }
 
 func TestFiltersMatchNameStatus(t *testing.T) {
-	res := statusResult{name: "git-repos", branch: "feature/x"}
+	res := statusResult{name: "git-repos", branch: "feature/x", workspace: "Feat-Login", feature: true, real: true}
 	cases := []struct {
 		name string
 		f    filters
@@ -106,6 +106,12 @@ func TestFiltersMatchNameStatus(t *testing.T) {
 		{"project не совпадает", filters{project: "other"}, false},
 		{"branch совпадает по подстроке", filters{branch: "feature"}, true},
 		{"branch не совпадает", filters{branch: "main"}, false},
+		{"branch без учёта регистра", filters{branch: "FEATURE"}, true},
+		{"worktree совпадает по подстроке", filters{worktree: "login"}, true},
+		{"worktree не совпадает", filters{worktree: "main"}, false},
+		{"worktree и статус — И", filters{worktree: "feat", feature: true}, true},
+		{"worktree и статус — статус не совпал", filters{worktree: "feat", pushable: true}, false},
+		{"project, branch и worktree вместе", filters{project: "REPOS", branch: "x", worktree: "feat"}, true},
 	}
 	for _, tc := range cases {
 		assert.Equal(t, tc.want, tc.f.matchStatus(res))

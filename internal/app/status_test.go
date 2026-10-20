@@ -194,3 +194,13 @@ func workspaceNames(results []statusResult) []string {
 	}
 	return out
 }
+
+func TestStatusFlagsRepoIsProject(t *testing.T) {
+	var opts options
+	fs := statusFlags(&opts)
+
+	require.NoError(t, fs.Parse([]string{"--repo", "app", "--worktree", "feat", "--branch", "fix"}))
+
+	assert.Equal(t, filters{project: "app", worktree: "feat", branch: "fix"}, opts.filters)
+	assert.Equal(t, "--project=app, --branch=fix, --worktree=feat", opts.filters.names())
+}
